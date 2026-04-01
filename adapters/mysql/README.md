@@ -8,12 +8,14 @@
 - **自动注入 LIMIT**：未指定 LIMIT 的 SELECT 默认最多返回 100 条，防止拉全表
 - **表结构查询**：通过 `information_schema` 返回行数估算 + 大小
 
-## 可用数据库（测试环境）
+## 可用数据库
 
-| Profile | 数据库 | 描述 |
-|---------|--------|------|
-| `test-finance` | `yunkc_finance` | 测试环境-财务库（259 张表） |
-| `test-base` | `yunkc_base` | 测试环境-base库 |
+| Profile | 环境 | 数据库 | 描述 |
+|---------|------|--------|------|
+| `polardb-test` | test | `yunkc_finance` | 测试环境 PolarDB 财务库 |
+| `polardb-uat` | uat | `yunkc_finance` | UAT 环境 PolarDB 财务库 |
+| `main-test` | test | `yunkc_base` | 测试环境主库 |
+| `main-uat` | uat | `yunkc_base` | UAT 环境主库 |
 
 ## 使用方法
 
@@ -54,7 +56,7 @@ result = client.query_sql(
 ```python
 result = client.query_sql(
     "SELECT * FROM some_table LIMIT 10",
-    profile_name="test-base"
+    profile_name="main-test"
 )
 ```
 

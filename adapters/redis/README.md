@@ -9,13 +9,20 @@
 - **SCAN 代替 KEYS**：模糊查 key 使用非阻塞的 SCAN
 - **支持 standalone 和 cluster 模式**
 
-## 可用连接（测试环境）
+## 可用连接
 
-| Profile | 描述 | DB |
-|---------|------|----|
-| `test` | 测试环境 Redis | db50（配置的默认 db） |
+| Profile | 环境 | 描述 | DB |
+|---------|------|------|----|
+| `finance-test` | test | 测试环境-财务 Redis | db30 |
+| `finance-uat` | uat | UAT 环境-财务 Redis | db30 |
+| `activity-test` | test | 测试环境-活动 Redis | db10 |
+| `activity-uat` | uat | UAT 环境-活动 Redis | db10 |
+| `price-test` | test | 测试环境-价格 Redis | db10 |
+| `price-uat` | uat | UAT 环境-价格 Redis | db12 |
+| `redis2-test` | test | 测试环境-Redis2 | db0 |
 
 > Redis 实际有 db0-db100，可通过 `info("keyspace")` 查看各 db 的 key 数量。
+> 默认 profile 为 `finance-test`（db30）。
 
 ## 使用方法
 
@@ -56,7 +63,7 @@ result = client.key_info("lock:order:598002873")  # 看 TTL
 **查 keyspace（各 db 的 key 数量）**：
 ```python
 result = client.info("keyspace")
-# 返回：{db50: {keys: 5071, expires: 0, avg_ttl: 0}, ...}
+# 返回：{db30: {keys: 5071, expires: 0, avg_ttl: 0}, ...}
 ```
 
 **查内存使用**：
@@ -76,6 +83,6 @@ result = client.info("memory")
 
 ## 注意事项
 
-- config.yaml 中默认 db=50，跨 db 查询时修改 config 或直接在连接 url 中指定
+- config.yaml 中默认 profile 为 `finance-test`（db30），跨 profile 查询时指定 `profile_name` 参数
 - Hash 类型的 value 用 `hgetall(key)` 或 `get_value(key)`（后者自动判断类型）
 - SCAN 不保证返回所有结果，`total_scanned` 字段显示实际扫描到的数量

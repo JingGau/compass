@@ -77,7 +77,7 @@ platform_doris:
 
 # ===== MySQL/PolarDB（通过 mysql adapter 查询） =====
 mysql:
-  - profile: "finance_prod"
+  - profile: "polardb-test"
     tables:
       - name: "t_user_wallet"
         description: "用户钱包主表"
@@ -105,7 +105,7 @@ mysql:
 
 # ===== Redis 常用 Key 模式 =====
 redis:
-  - profile: "prod"
+  - profile: "finance-test"
     key_patterns:
       - pattern: "wallet:balance:{org_id}:{user_id}"
         type: "STRING"

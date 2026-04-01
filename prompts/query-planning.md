@@ -86,11 +86,11 @@
 
 ```
 当前可用工具：
-  platform  → prod（仅线上，无测试环境）
-  sls       → prod, test, uat
-  mysql     → finance_prod, order_prod, base_test（按库区分）
-  redis     → prod_cluster, test_standalone
-  elasticsearch → es_prod（6.x）
+  platform       → prod（仅线上，无测试环境）
+  sls            → prod, test, uat
+  mysql          → polardb-test(yunkc_finance), polardb-uat(yunkc_finance), main-test(yunkc_base), main-uat(yunkc_base)
+  redis          → finance-test(db30), finance-uat(db30), activity-test(db10), activity-uat(db10), price-test(db10), price-uat(db12), redis2-test(db0)
+  elasticsearch  → test-finance（6.x，仅测试环境）
 ```
 
 3. **环境隔离原则**：
@@ -108,8 +108,8 @@
 
 ```
 Step 1 [sls → prod] 查支付日志
-Step 2 [mysql → finance_prod] 查支付记录
-Step 3 [redis → prod_cluster] 查缓存状态
+Step 2 [mysql → polardb-test] 查支付记录
+Step 3 [redis → finance-test] 查缓存状态
 ```
 
 ### 1. 匹配历史策略
@@ -255,7 +255,7 @@ Step 3 [redis → prod_cluster] 查缓存状态
 - 级联方案（B 依赖 A 的结果）→ 标记依赖，按顺序串行执行
 - 交叉方案（共享部分查询）→ 提取公共查询，避免重复执行
 
-### 5. 检查通用决策
+### 4. 检查通用决策
 
 读取 `memory/confirmations.yaml`，跳过已决策项（如「默认 prod 环境」）。
 
@@ -312,7 +312,7 @@ AI 在展示查询方案时，**必须**使用以下 Markdown 格式，保持整
 | Step | 目的（澄清什么） | 工具(adapter) | 环境/profile | 操作与查询内容 | 预期现象 |
 |------|-----------------|---------------|-------------|----------------|---------|
 | 1 | 确认缓存是否与 DB 一致 | redis | test | `GET wallet:balance:789:123456` | 拿到缓存数值或 key 不存在 |
-| 2 | 确认 DB 权威余额 | mysql | finance_prod | `SELECT available_amount FROM t_user_wallet WHERE user_id=123456 AND org_id=789` | 一行结果 |
+| 2 | 确认 DB 权威余额 | mysql | polardb-test | `SELECT available_amount FROM t_user_wallet WHERE user_id=123456 AND org_id=789` | 一行结果 |
 | 3 | 查是否有异常扣减/调账 | sls | prod | `walletOperate AND 123456`，最近 24h | ERROR 或关键 info |
 
 > **代码依据**：`WalletServiceImpl` 先读 Redis(`wallet:balance:{orgId}:{userId}`)，未命中再查 `t_user_wallet` 表
@@ -342,7 +342,7 @@ AI 在展示查询方案时，**必须**使用以下 Markdown 格式，保持整
 | Step | 目的 | 工具 | 环境 | 操作 | 查询内容 | 预期 |
 |------|------|------|------|------|---------|------|
 | A1 | 是否有回调错误 | sls | prod | 搜支付回调日志 | `payNotify AND {tradeSeq}` | 见 ERROR 或成功轨迹 |
-| A2 | 支付单库表状态 | mysql | finance_prod | 查支付记录 | `SELECT * FROM t_payment_record WHERE trade_seq='{tradeSeq}'` | 一行明确状态 |
+| A2 | 支付单库表状态 | mysql | polardb-test | 查支付记录 | `SELECT * FROM t_payment_record WHERE trade_seq='{tradeSeq}'` | 一行明确状态 |
 
 ---
 
@@ -359,7 +359,7 @@ AI 在展示查询方案时，**必须**使用以下 Markdown 格式，保持整
 
 | Step | 目的 | 工具 | 环境 | 操作 | 查询内容 | 预期 |
 |------|------|------|------|------|---------|------|
-| C1 | 近期资金变动 | mysql | finance_prod | 查资金流水 | `SELECT * FROM t_user_flow WHERE user_id={userId} ORDER BY create_time DESC LIMIT 10` | 见异常流水 |
+| C1 | 近期资金变动 | mysql | polardb-test | 查资金流水 | `SELECT * FROM t_user_flow WHERE user_id={userId} ORDER BY create_time DESC LIMIT 10` | 见异常流水 |
 | C2 | 冻结金额是否与 DB 一致 | redis | prod | 查冻结缓存 | `GET wallet:frozen:{orgId}:{userId}` | 与 C1 互证 |
 
 ---

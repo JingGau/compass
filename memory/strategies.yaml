@@ -26,7 +26,7 @@
 #    - adapter:       使用哪个 adapter
 #    - action:        一句话说明
 #    - template:      查询模板（含 {entity} 占位符）
-#    - env_profile:   目标环境/profile（如 prod, finance_prod）
+#    - env_profile:   目标环境/profile，必须与 adapters/*/config.yaml 中的实际 profile 名一致
 #    - source:        来自哪段代码（如有）
 #
 # 3. score    — 效果（用于排序）
@@ -132,13 +132,13 @@ presets:
         adapter: "redis"
         action: "查钱包缓存"
         template: "GET wallet:balance:{org_id}:{user_id}"
-        env_profile: "prod"
+        env_profile: "finance-test"
         source: "WalletServiceImpl#getBalance"
       - step: 2
         adapter: "mysql"
         action: "查DB钱包表对比"
         template: "SELECT available_amount, frozen_amount FROM t_user_wallet WHERE user_id = {user_id} AND org_id = {org_id}"
-        env_profile: "finance_prod"
+        env_profile: "polardb-test"
         source: "WalletMapper.xml"
       - step: 3
         adapter: "sls"
@@ -222,7 +222,7 @@ presets:
         adapter: "redis"
         action: "查充电实时状态缓存"
         template: "GET charge:status:{pile_code}"
-        env_profile: "prod"
+        env_profile: "finance-test"
         source: null
     score:
       effectiveness: 0.0
