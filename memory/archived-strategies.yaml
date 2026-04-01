@@ -1,0 +1,8 @@
+# 已归档的策略
+# 由 AI 自动维护，合并或淘汰的策略移入此处
+# 用户说「恢复策略」可从这里找回
+#
+# 条目格式与 strategies.yaml 中的策略完全相同
+# 额外增加 archived_at 和 archived_reason 字段
+
+archived: []

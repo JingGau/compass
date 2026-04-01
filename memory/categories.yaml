@@ -1,0 +1,125 @@
+# 问题分类库
+# AI 在场景分类阶段按 keywords 快速归类
+# 每次排查后自动更新 frequency
+
+categories:
+  # ===== C 端 — 充电相关 =====
+  - id: "cat-charge-stuck"
+    name: "充电订单-充电卡住"
+    keywords: ["充电中", "一直充电", "无法结束", "卡住", "超时", "充不进去"]
+    scene: "c-side"
+    primary_services: ["charge-server", "order-server"]
+    frequency: 0
+
+  - id: "cat-charge-start-fail"
+    name: "充电订单-启动失败"
+    keywords: ["启动失败", "无法充电", "扫码充电失败", "桩离线", "枪未插好"]
+    scene: "c-side"
+    primary_services: ["charge-server", "guan-zhong"]
+    frequency: 0
+
+  - id: "cat-charge-abnormal-end"
+    name: "充电订单-异常结束"
+    keywords: ["异常结束", "中断", "突然停止", "充电中断"]
+    scene: "c-side"
+    primary_services: ["charge-server", "order-server"]
+    frequency: 0
+
+  # ===== C 端 — 支付相关 =====
+  - id: "cat-payment-fail"
+    name: "充电订单-支付失败"
+    keywords: ["支付失败", "扣费异常", "支付超时", "扣费不对", "多扣", "少扣"]
+    scene: "c-side"
+    primary_services: ["finance_server", "payment-server"]
+    frequency: 0
+
+  - id: "cat-refund"
+    name: "充电订单-退款问题"
+    keywords: ["退款", "退费", "退款失败", "退款超时", "未退款", "refund", "refundAmount", "returnMoney", "chargeBack", "退款申请", "退款审核"]
+    scene: "c-side"
+    primary_services: ["finance_server", "payment-server"]
+    frequency: 0
+
+  # ===== C 端 — 账户相关 =====
+  - id: "cat-balance-abnormal"
+    name: "钱包-余额异常"
+    keywords: ["余额", "余额不对", "余额为0", "显示为0", "钱包", "balance"]
+    scene: "c-side"
+    primary_services: ["finance_server"]
+    frequency: 0
+
+  - id: "cat-recharge-fail"
+    name: "钱包-充值未到账"
+    keywords: ["充值失败", "充值未到账", "充值没到", "充了没反应"]
+    scene: "c-side"
+    primary_services: ["finance_server", "payment-server"]
+    frequency: 0
+
+  # ===== B 端 — 页面问题 =====
+  - id: "cat-page-blank"
+    name: "B端-页面数据不展示"
+    keywords: ["页面空白", "列表不显示", "加载失败", "没有数据", "页面报错"]
+    scene: "b-side"
+    primary_services: ["base_server", "finance_server"]
+    frequency: 0
+
+  - id: "cat-page-action-fail"
+    name: "B端-操作失败"
+    keywords: ["操作失败", "提交失败", "保存失败", "按钮无反应", "接口报错"]
+    scene: "b-side"
+    primary_services: ["base_server", "finance_server"]
+    frequency: 0
+
+  - id: "cat-device-pile-move"
+    name: "B端-挪桩/电站迁移溯源"
+    keywords: ["挪桩", "移桩", "迁移", "从哪个电站", "移入", "移出", "move_pile", "moveStationPiles", "充电站迁移", "桩迁"]
+    scene: "b-side"
+    primary_services: ["base_server", "poly_server"]
+    frequency: 0
+
+  # ===== B 端 — 钱包管理 =====
+  - id: "cat-wallet-manage"
+    name: "B端-钱包管理异常"
+    keywords: ["额度分配", "额度回收", "批量调整", "钱包管理", "充值审核"]
+    scene: "b-side"
+    primary_services: ["finance_server"]
+    frequency: 0
+
+  # ===== B 端 — 发票 =====
+  - id: "cat-invoice"
+    name: "B端-发票问题"
+    keywords: ["发票", "开票失败", "发票异常", "税率", "开不了票"]
+    scene: "b-side"
+    primary_services: ["finance_server", "invoice-server"]
+    frequency: 0
+
+  # ===== B 端 — 订单查询 =====
+  - id: "cat-order-query"
+    name: "B端-订单查询问题"
+    keywords: ["订单查不到", "订单状态不对", "订单列表", "订单详情"]
+    scene: "b-side"
+    primary_services: ["order-server", "trade-order-server"]
+    frequency: 0
+
+  # ===== B 端 — 结算 =====
+  - id: "cat-settlement"
+    name: "B端-结算问题"
+    keywords: ["结算", "清分", "分账", "结算单", "对账"]
+    scene: "b-side"
+    primary_services: ["clearing_server", "reconciliation_server"]
+    frequency: 0
+
+  # ===== 通用 =====
+  - id: "cat-config"
+    name: "通用-配置问题"
+    keywords: ["配置", "参数错误", "配置不生效", "开关"]
+    scene: "both"
+    primary_services: []
+    frequency: 0
+
+  - id: "cat-performance"
+    name: "通用-性能问题"
+    keywords: ["慢", "卡顿", "超时", "响应慢", "接口慢"]
+    scene: "both"
+    primary_services: []
+    frequency: 0

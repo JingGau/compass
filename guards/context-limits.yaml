@@ -1,0 +1,74 @@
+# 上下文管理限制
+# 控制查询结果在大模型上下文中的占用，防止上下文溢出
+
+# 全局限制
+global:
+  # 单次排查所有查询结果载入上下文的总行数上限
+  max_total_rows_in_context: 50
+  # 超过此行数触发临时文件模式
+  temp_file_threshold: 100
+  # 临时文件根目录
+  temp_file_root: "/tmp/investigation"
+  # 排查结束后自动清理临时文件
+  auto_cleanup: true
+
+# SLS 日志专项（上下文消耗最大的数据源）
+sls:
+  # 概览阶段：只提取统计信息，不载入原文
+  overview_only_threshold: 50
+  # 智能采样：载入上下文的最大日志条数
+  max_sample_in_context: 15
+  # ERROR 级别采样上限
+  max_error_sample: 10
+  # 字段裁剪：只保留这些字段
+  keep_fields:
+    - "__time__"
+    - "level"
+    - "message"
+    - "traceId"
+    - "exception"
+    - "request_uri"
+    - "status"
+  # 丢弃的字段（即使返回了也不载入上下文）
+  drop_fields:
+    - "__source__"
+    - "__tag__:__hostname__"
+    - "__tag__:__path__"
+    - "__tag__:_node_name_"
+    - "__tag__:_namespace_"
+    - "__tag__:_node_ip_"
+    - "__tag__:_container_ip_"
+    - "host"
+    - "pod"
+    - "namespace"
+    - "container"
+
+# MySQL / Platform 查询结果
+sql:
+  # 载入上下文的最大行数
+  max_rows_in_context: 20
+  # 单行最大字符数（超长字段截断）
+  max_field_length: 500
+  # 截断标记
+  truncate_marker: "...[truncated]"
+
+# Redis
+redis:
+  # 载入上下文的最大 key 数
+  max_keys_in_context: 20
+  # 单个 value 最大展示长度
+  max_value_display_length: 1000
+
+# Elasticsearch
+elasticsearch:
+  # 载入上下文的最大文档数
+  max_docs_in_context: 15
+  # 高亮片段最大长度
+  max_highlight_length: 300
+
+# 按需下钻设置
+drill_down:
+  # 每次下钻加载条数
+  batch_size: 10
+  # 下钻时的字段裁剪（同 sls.keep_fields，可按需放宽）
+  expand_fields: false

@@ -1,0 +1,137 @@
+# 常用数据表索引
+# 用于 AI 在排查时快速找到正确的表和关键字段
+# 生成方式：AI 执行 SHOW TABLES + DESC 后自动生成
+
+# ===== 平台数据（Doris，通过 platform adapter 查询） =====
+platform_doris:
+  - database: "ods_order_cdc"
+    tables:
+      - name: "ods_order_s_t_charging_record_history"
+        description: "充电记录历史表 - 所有充电订单的完整记录"
+        key_columns:
+          - { name: "record_id", type: "bigint", description: "充电记录ID" }
+          - { name: "uid", type: "bigint", description: "用户ID" }
+          - { name: "trade_seq", type: "varchar", description: "交易流水号" }
+          - { name: "trade_status", type: "int", description: "交易状态 1=充电中 2=已完成 3=已取消" }
+          - { name: "paied_amount", type: "decimal", description: "实付金额" }
+          - { name: "start_time", type: "datetime", description: "开始充电时间" }
+          - { name: "end_time", type: "datetime", description: "结束充电时间" }
+          - { name: "pile_code", type: "varchar", description: "充电桩编码" }
+          - { name: "station_id", type: "bigint", description: "电站ID" }
+        partition_key: "dt_month"
+        common_queries:
+          - "按用户查最近订单: SELECT * FROM ... WHERE dt_month = '{dt_month}' AND uid = {user_id} ORDER BY start_time DESC LIMIT 10"
+          - "按交易流水号查: SELECT * FROM ... WHERE dt_month = '{dt_month}' AND trade_seq = '{trade_seq}'"
+        notes: "必须带 dt_month 分区键。格式: 2026-03-01（月份第一天）"
+
+  - database: "ods_base_cdc"
+    tables:
+      - name: "ods_base_s_t_charging_user"
+        description: "充电用户基础信息表"
+        key_columns:
+          - { name: "user_id", type: "bigint", description: "用户ID" }
+          - { name: "user_phone", type: "varchar", description: "手机号" }
+          - { name: "nick_name", type: "varchar", description: "昵称" }
+        partition_key: null
+        common_queries:
+          - "按手机号查用户: SELECT user_id, user_phone, nick_name FROM ... WHERE user_phone = '{phone}'"
+        notes: "非分区表"
+
+      - name: "ods_base_s_t_charging_station"
+        description: "电站信息表"
+        key_columns:
+          - { name: "station_id", type: "bigint", description: "电站ID" }
+          - { name: "station_name", type: "varchar", description: "电站名称" }
+          - { name: "operator_id", type: "bigint", description: "运营商ID" }
+        partition_key: null
+        common_queries:
+          - "按ID查电站: SELECT station_id, station_name, operator_id FROM ... WHERE station_id = {station_id}"
+        notes: "非分区表。旧名 ods_base_s_t_power_station 已废弃，以实际排查验证的表名为准"
+
+      - name: "ods_base_s_t_charging_pile"
+        description: "充电桩信息表 - 桩编码、桩名、所属电站等基础信息"
+        key_columns:
+          - { name: "pile_id", type: "bigint", description: "充电桩ID" }
+          - { name: "pile_code", type: "varchar", description: "充电桩编码" }
+          - { name: "pile_name", type: "varchar", description: "充电桩名称" }
+          - { name: "station_belong_to", type: "bigint", description: "所属电站ID" }
+          - { name: "update_time", type: "datetime", description: "更新时间" }
+        partition_key: null
+        common_queries:
+          - "按桩编码查: SELECT pile_id, pile_code, pile_name, station_belong_to, update_time FROM ... WHERE pile_code = '{pile_code}'"
+        notes: "非分区表。CDC 快照可能与迁桩瞬间不一致，需结合 SLS 日志时间窗对照"
+
+      - name: "ods_move_pile_operate_record"
+        description: "挪桩操作记录表 - 记录充电桩从源电站迁移到目标电站的操作流水"
+        key_columns:
+          - { name: "id", type: "bigint", description: "记录ID" }
+          - { name: "target_pile_code", type: "varchar", description: "目标充电桩编码" }
+          - { name: "source_station_id", type: "bigint", description: "源电站ID" }
+          - { name: "target_station_id", type: "bigint", description: "目标电站ID" }
+          - { name: "create_time", type: "datetime", description: "操作时间" }
+        partition_key: null
+        common_queries:
+          - "按桩编码查迁移记录: SELECT * FROM ... WHERE target_pile_code = '{pile_code}' ORDER BY create_time DESC LIMIT 20"
+          - "按电站查迁入记录: SELECT * FROM ... WHERE target_station_id = {station_id} ORDER BY create_time DESC LIMIT 20"
+        notes: "非分区表。CDC 数据可能不全，无行时以 SLS 日志为准"
+
+# ===== MySQL/PolarDB（通过 mysql adapter 查询） =====
+mysql:
+  - profile: "finance_prod"
+    tables:
+      - name: "t_user_wallet"
+        description: "用户钱包主表"
+        key_columns:
+          - { name: "user_id", type: "bigint", description: "用户ID" }
+          - { name: "org_id", type: "bigint", description: "机构ID" }
+          - { name: "available_amount", type: "decimal(18,2)", description: "可用余额" }
+          - { name: "frozen_amount", type: "decimal(18,2)", description: "冻结金额" }
+          - { name: "total_recharge", type: "decimal(18,2)", description: "累计充值" }
+        common_queries:
+          - "查余额: SELECT available_amount, frozen_amount FROM t_user_wallet WHERE user_id = {user_id} AND org_id = {org_id}"
+        notes: "待确认实际表名和字段"
+
+      - name: "t_wallet_flow"
+        description: "钱包流水表"
+        key_columns:
+          - { name: "flow_id", type: "bigint", description: "流水ID" }
+          - { name: "user_id", type: "bigint", description: "用户ID" }
+          - { name: "change_amount", type: "decimal(18,2)", description: "变动金额" }
+          - { name: "flow_type", type: "int", description: "流水类型" }
+          - { name: "create_time", type: "datetime", description: "创建时间" }
+        common_queries:
+          - "查最近变动: SELECT * FROM t_wallet_flow WHERE user_id = {user_id} ORDER BY create_time DESC LIMIT 20"
+        notes: "待确认实际表名"
+
+# ===== Redis 常用 Key 模式 =====
+redis:
+  - profile: "prod"
+    key_patterns:
+      - pattern: "wallet:balance:{org_id}:{user_id}"
+        type: "STRING"
+        description: "钱包余额缓存"
+        ttl: "30min"
+
+      - pattern: "charge:status:{pile_code}"
+        type: "HASH"
+        description: "充电桩实时状态"
+        ttl: "无过期"
+
+      - pattern: "order:lock:{order_id}"
+        type: "STRING"
+        description: "订单操作分布式锁"
+        ttl: "30s"
+
+      - pattern: "user:token:{user_id}"
+        type: "STRING"
+        description: "用户登录 Token"
+        ttl: "7d"
+
+    notes: "Key 模式和 TTL 为推测值，准确信息需从代码中确认"
+
+# 元信息
+meta:
+  generated_at: "2026-03-28"
+  generated_by: "initial-setup"
+  verified: false
+  notes: "以上表结构和Key模式为业务推断的骨架，准确数据需通过 adapter 执行 SHOW TABLES/DESC 后更新"

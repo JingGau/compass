@@ -1,0 +1,17 @@
+# 敏感配置（环境变量实际值）
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# 排查临时文件
+/tmp/
+
+# 审计日志（含脱敏记录，不入库）
+memory/audit-log.yaml
+memory/audit-archive/
+
+# OS
+.DS_Store

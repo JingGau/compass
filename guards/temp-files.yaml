@@ -1,0 +1,55 @@
+# 临时文件管理规范
+# 定义排查过程中产生的临时文件的创建、命名、清理规则
+
+# 根目录
+base_dir: "/tmp/investigation"
+
+# 目录结构
+# /tmp/investigation/
+#   └── {session_id}/           # 每次排查一个目录
+#       ├── sls_1711612800.jsonl    # SLS 查询结果
+#       ├── mysql_1711612801.csv    # MySQL 查询结果
+#       └── summary.md             # 排查摘要（可选）
+
+# Session ID 规则
+session_id:
+  format: "{date}_{short_uuid}"
+  example: "20260328_a1b2c3"
+  description: "日期 + 6 位随机字符串，确保唯一"
+
+# 文件命名
+file_naming:
+  pattern: "{adapter}_{unix_timestamp}.{ext}"
+  extensions:
+    sls: "jsonl"
+    mysql: "csv"
+    redis: "json"
+    elasticsearch: "json"
+    platform: "csv"
+    summary: "md"
+
+# 生命周期
+lifecycle:
+  auto_create_dir: true
+  max_files_per_session: 20
+  max_file_size_mb: 50
+  max_total_size_mb: 200
+
+# 清理规则
+cleanup:
+  on_session_end: true
+  on_session_end_ask_user: true
+  stale_threshold_hours: 24
+  stale_auto_delete: true
+  cleanup_message: "排查结束，临时文件已清理。如需保留，请提前说「导出结果」"
+
+# 并发安全
+concurrency:
+  session_isolation: true
+  description: "每个排查会话独立目录，不会相互干扰"
+
+# 安全约束
+security:
+  no_sensitive_in_filename: true
+  file_permissions: "600"
+  description: "文件名不含用户ID/手机号等敏感信息；权限仅限当前用户读写"

@@ -1,0 +1,11 @@
+enabled: true
+
+profiles:
+  - name: "test-finance"
+    env: "test"
+    url: "http://es-cn-0pp0wwi7h001n7gez.elasticsearch.aliyuncs.com:9200"
+    username: "${ES_TEST_FINANCE_USERNAME:-elastic}"
+    password: "${ES_TEST_FINANCE_PASSWORD}"
+    description: "财务测试 ES"
+
+default_profile: "test-finance"

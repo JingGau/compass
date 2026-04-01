@@ -1,0 +1,56 @@
+sql:
+  max_limit: 100
+  max_scan_warn: 100000
+  max_scan_block: 1000000
+  forbidden_keywords:
+    - "DELETE"
+    - "UPDATE"
+    - "INSERT"
+    - "DROP"
+    - "ALTER"
+    - "TRUNCATE"
+    - "GRANT"
+    - "REVOKE"
+
+sls:
+  max_time_range_hours: 168
+  max_limit: 500
+  default_time_range: "-1h"
+
+redis:
+  max_scan_keys: 100              # SCAN 单次最多返回 key 数
+  max_list_range: 100             # LRANGE/ZRANGE 单次最多元素数
+  max_set_members: 100            # SMEMBERS 单次最多元素数
+  max_hgetall_fields: 500         # HGETALL 字段数超此值需警告
+  forbidden_commands:
+    - "KEYS"
+    - "FLUSHALL"
+    - "FLUSHDB"
+    - "CONFIG"
+    - "SHUTDOWN"
+    - "DEBUG"
+    - "SET"
+    - "DEL"
+    - "EXPIRE"
+    - "HSET"
+    - "LPUSH"
+    - "RPUSH"
+
+elasticsearch:
+  max_size: 100                   # 单次搜索 size 上限
+  max_from_plus_size: 10000       # 深分页防护 from+size 上限
+  max_agg_terms_size: 1000        # 聚合 terms size 上限
+  forbidden_operations:
+    - "_delete"
+    - "_update"
+    - "_bulk"
+    - "_delete_by_query"
+    - "_reindex"
+    - "_create"
+    - "_template"
+    - "_snapshot"
+
+general:
+  max_parallel_queries: 3
+  query_timeout_seconds: 30
+  export_timeout_seconds: 120
