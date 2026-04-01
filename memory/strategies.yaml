@@ -28,8 +28,6 @@
 #    - template:      查询模板（含 {entity} 占位符）
 #    - env_profile:   目标环境/profile（如 prod, finance_prod）
 #    - source:        来自哪段代码（如有）
-#    - parallel_with: 可与哪个 step 并行（null 表示独立）
-#    - depends_on:    依赖哪个 step 的结果（null 表示无依赖）
 #
 # 3. score    — 效果（用于排序）
 #    effectiveness:  成功定位问题的比率 (0.0 ~ 1.0)
@@ -91,24 +89,18 @@ strategies:
         template: "{pile_code} OR moveStationPiles OR MovePileBo"
         env_profile: "prod"
         source: "projects/omp-shop.md、projects/base_server.md；PileService.java、PileRpcController.java、api.js"
-        parallel_with: null
-        depends_on: null
       - step: 2
         adapter: "platform"
         action: "Doris 印证站名与辅助流水：ods_base_s_t_charging_station 按 id 解析站名；ods_move_pile_operate_record 按 target_pile_code 或站 id 查询（CDC 可能不全，无行时以 SLS 为准）。"
         template: "SELECT station_id, station_name FROM ods_base_cdc.ods_base_s_t_charging_station WHERE station_id IN ({source_station_id},{target_station_id}); SELECT * FROM ods_base_cdc.ods_move_pile_operate_record WHERE target_pile_code = '{pile_code}' ORDER BY create_time DESC LIMIT 20"
         env_profile: "prod"
         source: "MovePileOperateRecordMapper.xml → move_pile_operate_record"
-        parallel_with: null
-        depends_on: 1
       - step: 3
         adapter: "platform"
         action: "可选：ods_base_s_t_charging_pile 按 pile_code 查 station_belong_to 与桩名，与日志时间窗对照（快照可能与迁桩瞬间不一致）。"
         template: "SELECT pile_id, pile_code, pile_name, station_belong_to, update_time FROM ods_base_cdc.ods_base_s_t_charging_pile WHERE pile_code = '{pile_code}' LIMIT 5"
         env_profile: "prod"
         source: "ods_base_cdc.ods_base_s_t_charging_pile"
-        parallel_with: null
-        depends_on: 1
     score:
       effectiveness: 0.85
       usage_count: 1
@@ -142,24 +134,18 @@ presets:
         template: "GET wallet:balance:{org_id}:{user_id}"
         env_profile: "prod"
         source: "WalletServiceImpl#getBalance"
-        parallel_with: null
-        depends_on: null
       - step: 2
         adapter: "mysql"
         action: "查DB钱包表对比"
         template: "SELECT available_amount, frozen_amount FROM t_user_wallet WHERE user_id = {user_id} AND org_id = {org_id}"
         env_profile: "finance_prod"
         source: "WalletMapper.xml"
-        parallel_with: 1
-        depends_on: null
       - step: 3
         adapter: "sls"
         action: "查最近钱包操作日志"
         template: "walletOperate AND {user_id}"
         env_profile: "prod"
         source: "WalletServiceImpl"
-        parallel_with: null
-        depends_on: null
     score:
       effectiveness: 0.0
       usage_count: 0
@@ -187,24 +173,18 @@ presets:
         template: "SELECT user_id, user_phone FROM ods_base_cdc.ods_base_s_t_charging_user WHERE user_phone = '{user_phone}'"
         env_profile: "prod"
         source: null
-        parallel_with: null
-        depends_on: null
       - step: 2
         adapter: "platform"
         action: "查充电记录"
         template: "SELECT record_id, trade_seq, trade_status, paied_amount FROM ods_order_cdc.ods_order_s_t_charging_record_history WHERE dt_month = '{dt_month}' AND uid = {user_id} ORDER BY start_time DESC LIMIT 5"
         env_profile: "prod"
         source: null
-        parallel_with: null
-        depends_on: 1
       - step: 3
         adapter: "sls"
         action: "查支付异常日志"
         template: "{trade_seq} AND (ERROR OR Exception OR payNotify)"
         env_profile: "prod"
         source: null
-        parallel_with: null
-        depends_on: 2
     score:
       effectiveness: 0.0
       usage_count: 0
@@ -232,24 +212,18 @@ presets:
         template: "SELECT record_id, trade_status, start_time, end_time FROM ods_order_cdc.ods_order_s_t_charging_record_history WHERE dt_month = '{dt_month}' AND uid = {user_id} AND trade_status = 1 LIMIT 5"
         env_profile: "prod"
         source: null
-        parallel_with: null
-        depends_on: null
       - step: 2
         adapter: "sls"
         action: "查充电桩通信日志"
         template: "{pile_code} AND (heartbeat OR startCharge OR stopCharge)"
         env_profile: "prod"
         source: null
-        parallel_with: 1
-        depends_on: null
       - step: 3
         adapter: "redis"
         action: "查充电实时状态缓存"
         template: "GET charge:status:{pile_code}"
         env_profile: "prod"
         source: null
-        parallel_with: 1
-        depends_on: null
     score:
       effectiveness: 0.0
       usage_count: 0

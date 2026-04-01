@@ -48,7 +48,6 @@ Step 1: 提取本次排查的 pattern
 Step 2: 记录 plan
   - 按实际执行的查询步骤记录
   - 标注 adapter、action、template、source
-  - 标注并行/依赖关系
   - 记录实际使用的环境/profile
 
 Step 3: 初始化 score

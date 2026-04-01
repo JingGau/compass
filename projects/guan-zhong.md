@@ -8,8 +8,8 @@
 | 代码根路径 | `/Users/dongmaowei/workspace/projects/TRADE/guan-zhong` |
 | SLS 容器名 | 待从部署或 `application*.yml` 的 `spring.application.name` 核对 |
 | 关联数据库 | 待从配置核对 |
-| 所属端 | B端+C端（视接口而定） |
-| 一句话职责 | 本地仓库 `guan-zhong`，路径由磁盘扫描得到 |
+| 所属端 | C端（App 侧调用后端的入口应用） |
+| 一句话职责 | C端 App 统一网关/入口，承载充电、订单、支付、用户等核心链路的请求转发与业务编排 |
 
 ## 代码导航
 

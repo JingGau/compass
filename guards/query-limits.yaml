@@ -51,6 +51,5 @@ elasticsearch:
     - "_snapshot"
 
 general:
-  max_parallel_queries: 3
   query_timeout_seconds: 30
   export_timeout_seconds: 120
