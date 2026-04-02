@@ -85,12 +85,15 @@ projects:
 
 ### Step 5 — 验证连接
 
-逐个测试 adapter 连通性：
+直接用 MCP 工具测试连通性：
 
-```python
-# 用 venv 执行
-python adapters/<name>/client.py
-```
+| 工具 | MCP 工具 | 测试命令 |
+|------|---------|---------|
+| Platform | `mcp__mysql-client__*` | `list_connections` |
+| SLS | `mcp__sls-client__*` | `list_logstores` |
+| MySQL | `mcp__mysql-client__*` | `list_connections` |
+| Redis | `mcp__redis-client__*` | `list_connections` |
+| ES | `mcp__elasticsearch-client__*` | `list_connections` |
 
 输出配置报告：
 

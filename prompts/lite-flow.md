@@ -101,17 +101,15 @@
 
 ## 工具使用速查
 
-读取 `adapters/<name>/config.yaml` 获取连接信息，然后：
+直接使用 MCP 工具，无需 Python：
 
-| 工具 | 脚本路径 | 快速用法 |
-|------|---------|---------|
-| Platform | `adapters/platform/client.py` | `health_check()` → `query_doris(sql, profile)` |
-| SLS | `adapters/sls/client.py` | `health_check()` → `query_logs(project, logstore, query, ...)` |
-| MySQL | `adapters/mysql/client.py` | `health_check()` → `query_sql(sql, profile)` |
-| Redis | `adapters/redis/client.py` | `health_check()` → `execute_command(command, profile)` |
-| ES | `adapters/elasticsearch/client.py` | `health_check()` → `search(index, query, profile)` |
-
-先调用 `health_check()` 确认连接正常，再执行查询。
+| 工具 | MCP 工具 | 说明 |
+|------|---------|------|
+| Platform | `mcp__mysql-client__*` | Doris 查询（仅 prod） |
+| SLS | `mcp__sls-client__query_logs` | 日志查询 |
+| MySQL | `mcp__mysql-client__execute_sql` | MySQL 查询 |
+| Redis | `mcp__redis-client__execute_command` | Redis 操作 |
+| ES | `mcp__elasticsearch-client__es_search` | ES 搜索 |
 
 ---
 
