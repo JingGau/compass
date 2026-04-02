@@ -8,6 +8,18 @@ config/code-repos.yaml
 projects/*
 !projects/_convention.md
 
+# 用户从代码扫描生成的端侧知识库（保留 _convention.md）
+knowledge/b-side/*
+!knowledge/b-side/_convention.md
+knowledge/c-side/*
+!knowledge/c-side/_convention.md
+
+# 用户积累的策略（排查经验随使用增长，保留 _convention.md）
+memory/strategies.yaml
+memory/archived-strategies.yaml
+memory/audit-log.yaml
+memory/audit-archive/
+
 # Python
 __pycache__/
 *.pyc
@@ -15,10 +27,6 @@ __pycache__/
 
 # 排查临时文件
 /tmp/
-
-# 审计日志（含脱敏记录，不入库）
-memory/audit-log.yaml
-memory/audit-archive/
 
 # OS
 .DS_Store
