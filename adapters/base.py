@@ -45,10 +45,8 @@ def _resolve_env_vars(value):
             result = os.environ.get(var_name)
             if result is None:
                 if default is None:
-                    raise ValueError(
-                        f"环境变量 {var_name!r} 未设置，且无默认值，"
-                        f"请在 shell 中执行: export {var_name}=<值>"
-                    )
+                    # 凭证缺失时返回空串，不阻止其他 profile 初始化
+                    return ""
                 return default
             return result
         resolved = _ENV_VAR_PATTERN.sub(replacer, value)
