@@ -75,6 +75,69 @@ platform_doris:
           - "按电站查迁入记录: SELECT * FROM ... WHERE target_station_id = {station_id} ORDER BY create_time DESC LIMIT 20"
         notes: "非分区表。CDC 数据可能不全，无行时以 SLS 日志为准"
 
+  # ---- JDBC Catalog 直连（不走 CDC，三段式路径） ----
+  # finance_jdbc_catalog.yunkc_finance — 清分服务业务库直连
+  - database: "finance_jdbc_catalog.yunkc_finance"
+    access: "jdbc_catalog"
+    description: "三方清分业务表（CDC 未同步，只能通过 JDBC Catalog 直查）"
+    tables:
+      - name: "clearing_tp_clearing_bill"
+        description: "三方清分账单 — PENDING→PROCESSING→CLEARED/FAIL"
+        key_columns:
+          - { name: "id", type: "bigint", description: "主键" }
+          - { name: "bill_number", type: "varchar", description: "清分单号（雪花ID）" }
+          - { name: "business_type", type: "varchar", description: "业务类型：RECHARGE=充值加购" }
+          - { name: "business_number", type: "varchar", description: "业务单号" }
+          - { name: "status", type: "varchar", description: "状态：PENDING/PROCESSING/CLEARED/FAIL" }
+          - { name: "amount", type: "decimal", description: "清分金额" }
+          - { name: "payer_account", type: "varchar", description: "付款账户" }
+          - { name: "payee_account", type: "varchar", description: "收款账户" }
+          - { name: "predict_clearing_time", type: "datetime", description: "预计清分时间" }
+          - { name: "actual_clearing_time", type: "datetime", description: "实际清分时间" }
+          - { name: "create_time", type: "datetime", description: "创建时间" }
+        partition_key: null
+        common_queries:
+          - "状态分布: SELECT status, COUNT(*) AS cnt FROM finance_jdbc_catalog.yunkc_finance.`clearing_tp_clearing_bill` WHERE create_time >= DATE_SUB(CURDATE(), INTERVAL 3 DAY) GROUP BY status"
+          - "FAIL 单明细: SELECT * FROM finance_jdbc_catalog.yunkc_finance.`clearing_tp_clearing_bill` WHERE status = 'FAIL' ORDER BY create_time DESC LIMIT 20"
+          - "PROCESSING 卡住: SELECT * FROM finance_jdbc_catalog.yunkc_finance.`clearing_tp_clearing_bill` WHERE status = 'PROCESSING' AND predict_clearing_time < CURDATE() LIMIT 20"
+        notes: "FAIL 单会被 execTpClearing 自动重试。PROCESSING 卡住需查 confirmTpClearingResult Job"
+
+      - name: "clearing_tp_withdraw_bill"
+        description: "三方提现单 — PROCESSING→SUCCESS/FAIL→DISHONOUR"
+        key_columns:
+          - { name: "id", type: "bigint", description: "主键" }
+          - { name: "withdraw_number", type: "varchar", description: "提现单号" }
+          - { name: "status", type: "varchar", description: "状态：PROCESSING/SUCCESS/FAIL/DISHONOUR" }
+          - { name: "amount", type: "decimal", description: "提现金额" }
+          - { name: "wallet_id", type: "bigint", description: "钱包ID" }
+          - { name: "create_time", type: "datetime", description: "创建时间" }
+        partition_key: null
+        common_queries:
+          - "状态分布: SELECT status, COUNT(*) AS cnt FROM finance_jdbc_catalog.yunkc_finance.`clearing_tp_withdraw_bill` WHERE create_time >= DATE_SUB(CURDATE(), INTERVAL 3 DAY) GROUP BY status"
+        notes: "退票 DISHONOUR 金额会退回钱包"
+
+      - name: "clearing_tp_wallet"
+        description: "三方钱包 — 余额、冻结金额"
+        key_columns:
+          - { name: "id", type: "bigint", description: "主键" }
+          - { name: "account_id", type: "varchar", description: "账户ID" }
+          - { name: "balance", type: "decimal", description: "可用余额" }
+          - { name: "frozen_amount", type: "decimal", description: "冻结金额" }
+          - { name: "version", type: "int", description: "乐观锁版本号" }
+        partition_key: null
+
+      - name: "clearing_tp_wallet_flow"
+        description: "三方钱包流水 — CLEARING/WITHDRAW/REFUND/FREEZE/DISHONOUR"
+        key_columns:
+          - { name: "id", type: "bigint", description: "主键" }
+          - { name: "wallet_id", type: "bigint", description: "钱包ID" }
+          - { name: "business_type", type: "varchar", description: "业务类型：CLEARING/WITHDRAW/REFUND/FREEZE/UNFREEZE/DISHONOUR" }
+          - { name: "amount", type: "decimal", description: "变动金额" }
+          - { name: "create_time", type: "datetime", description: "创建时间" }
+        partition_key: null
+        common_queries:
+          - "查钱包流水: SELECT * FROM finance_jdbc_catalog.yunkc_finance.`clearing_tp_wallet_flow` WHERE wallet_id = {wallet_id} ORDER BY create_time DESC LIMIT 20"
+
 # ===== MySQL/PolarDB（通过 mysql adapter 查询） =====
 mysql:
   - profile: "polardb-test"

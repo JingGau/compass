@@ -87,7 +87,23 @@
    - 有哪些 `profiles`（每个 profile 对应一个环境/实例）
    - 每个 profile 的连接信息是否完整
 
-2. **建立当前可用工具清单**：
+2. **Platform adapter 额外探查（Doris Catalog 发现）**：
+   - **必须执行** `SHOW CATALOGS` 获取所有 catalog（internal + jdbc + hms/paimon）
+   - **`SHOW DATABASES` 只返回 internal catalog 的库**，JDBC catalog 的库不会出现
+   - JDBC catalog 下的表必须用三段式路径：`catalog_name.database_name.table_name`
+   - 如果目标表在 `ods_*_cdc` 库中找不到 → 检查 JDBC catalog 是否有对应的业务库直连
+   - 参考 `knowledge/doris-jdbc-catalogs.md` 了解已知 catalog 和表映射
+
+3. **主动刷新机制（默认内置，无需用户触发）**：
+   - **过期阈值**：默认 7 天。超过 7 天未对 Doris 执行 `SHOW CATALOGS` → 视为知识过期
+   - **过期提醒**：排查结束后告知用户「Doris 工具信息已超过 7 天未刷新，建议重新探查 catalog/表列表」
+   - **排查中主动刷新**：在排查过程中，若以下任一情况发生，**立即主动执行探查**，不等待排查结束：
+     - 在 `ods_*_cdc` 库中找不到目标表
+     - `knowledge/` 目录中无相关表信息（如目标表之前未记录）
+     - 查询返回「Unknown database」或「Table not found」
+   - **探查完成后**：在排查结论或总结中注明本次探查发现（如「新发现 xxx catalog 下 xxx 表」），由用户决定是否更新 `knowledge/` 知识文件
+
+4. **建立当前可用工具清单**：
 
 ```
 当前可用工具：
@@ -98,13 +114,13 @@
   elasticsearch  → test-finance（6.x，仅测试环境）
 ```
 
-3. **环境隔离原则**：
+5. **环境隔离原则**：
    - **不同环境的数据不能混查**：不能用 prod 的日志关联 test 的数据库
    - **platform 只有 prod**：如果问题发生在测试环境，不能用 platform 查
    - **确定目标环境**：从用户描述或 `memory/confirmations.yaml` 确定排查环境
    - **查询方案中必须标注每步的环境/profile**
 
-4. **工具不可用时的处理**：
+6. **工具不可用时的处理**：
    - adapter `enabled: false` → 跳过，不纳入方案
    - 目标环境下无对应 profile → 告知用户该环境不可用
    - 连接信息不完整 → 告知用户需补充配置
