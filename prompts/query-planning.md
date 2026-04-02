@@ -42,7 +42,12 @@
 
 ### 0. 代码理解（排查前置）
 
-在制定查询方案前，先获取代码层面的理解：
+**路径解析（必须先执行）**：
+1. 读取 `config/code-repos.yaml`，解析 `code_root`（支持 `${ENV_VAR:-default}`，从 `.env` 读取）
+2. 读取需要的项目路径：
+   - 项目在 `projects` 映射中 → `code_root` + 映射的相对路径
+   - 项目不在映射中 → 在 `code_root` 下递归扫描同名子目录
+3. `projects/*.md` 中的 `代码根路径` 字段是相对路径（如 `TRADE/order-server`），与 `config/code-repos.yaml` 一致
 
 **检查 `projects/` 目录**：
 - 列出 `projects/` 下除 `_convention.md` 以外的 `.md` 文件

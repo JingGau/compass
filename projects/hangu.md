@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | Java 后端（扫描：Java/Maven） |
-| 代码根路径 | `/Users/dongmaowei/workspace/projects/TRADE/hangu` |
+| 代码根路径 | `TRADE/hangu` |
 | SLS 容器名 | 待从部署或 `application*.yml` 的 `spring.application.name` 核对 |
 | 关联数据库 | 待从配置核对 |
 | 所属端 | B端+C端（视接口而定） |

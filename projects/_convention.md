@@ -2,6 +2,14 @@
 
 本文档是 AI 自主注册项目的唯一规范。每个项目一个 `.md` 文件，作为 **代码导航地图**，告诉 AI 排查时去哪读活代码。
 
+所有代码路径基于 `config/code-repos.yaml` 解析：
+- **code_root**：从 `.env` 的 `CODE_ROOT` 读取，每个开发者设置自己的代码仓库根目录
+- **路径解析**：AI 读 `config/code-repos.yaml` 的 `projects` 映射 → 拼接 `code_root` + 相对路径得到绝对路径
+- **自动发现**：项目不在 `projects` 映射中 → AI 在 `code_root` 下递归扫描同名子目录
+- **`代码根路径` 字段**：写相对于 `code_root` 的路径，按你实际的目录结构来：
+  - 有分组目录：`FINANCE/finance_server` 或 `TRADE/order-server`
+  - 无分组平铺：`finance_server` 或 `order-server`
+
 ## 插件化规则
 
 - 加一个 `projects/<name>.md` = 注册一个项目，不修改任何其他文件
@@ -18,7 +26,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | {Java 后端 / Python 服务 / ...} |
-| 代码根路径 | {绝对路径，如 /Users/.../projects/FINANCE/finance_server/finance_server} |
+| 代码根路径 | {相对路径（相对于 config/code-repos.yaml 的 code_root），如 FINANCE/finance_server} |
 | SLS 容器名 | {如 finance-server} |
 | 关联数据库 | {如 yunkc_finance（MySQL）} |
 | 所属端 | {B端 / C端 / B端+C端} |
@@ -73,7 +81,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | {前端 Vue / React / ...} |
-| 代码根路径 | {绝对路径} |
+| 代码根路径 | {相对路径（相对于 config/code-repos.yaml 的 code_root），如 Front/omp-shop} |
 | 所属端 | B端 |
 | 一句话职责 | {如：商户管理后台前端} |
 | 技术栈 | {Vue 2 + Element UI / ...} |

@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | 其他（扫描：未识别（无 pom/package.json/py 标记）） |
-| 代码根路径 | `/Users/dongmaowei/workspace/projects/LLM/agent-hands` |
+| 代码根路径 | `LLM/agent-hands` |
 | SLS 容器名 | 待从部署或 `application*.yml` 的 `spring.application.name` 核对 |
 | 关联数据库 | 待从配置核对 |
 | 所属端 | 内部工具 |

@@ -18,7 +18,7 @@ AI: 要注册哪个项目？
 ```
 
 如果用户只说了服务名（如"finance_server"），AI 应：
-1. 先在 workspace-index.yaml 中查找对应路径
+1. 先在 `config/code-repos.yaml` 的 `projects` 映射中查找对应路径，拼接 `code_root` + 相对路径
 2. 找到 → 自动使用，不再追问
 3. 找不到 → 请用户提供路径
 

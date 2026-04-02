@@ -1,0 +1,61 @@
+# 代码仓库路径配置
+# AI 在排查 Step 0（代码理解）时读取此文件解析代码位置
+#
+# 路径解析规则（优先级从高到低）：
+#   1. projects.<name> 如果是绝对路径（以 / 开头）→ 直接使用
+#   2. projects.<name> 如果是相对路径 → 拼接 code_root
+#   3. 没有在 projects 映射中的项目 → 在 code_root 下递归扫描同名子目录
+#
+# code_root 支持 ${ENV_VAR:-default} 语法，新用户在 .env 中设置 CODE_ROOT 即可。
+# 如果项目名和目录名一致（如 projects/charge-server.md → code_root 下有 charge-server/），
+# 则无需在 projects 中配置，AI 自动发现。
+
+code_root: ${CODE_ROOT:-/Users/dongmaowei/workspace/projects}
+
+# 仅当项目文件名与实际代码目录名不同，或项目在子目录下时才需要显式配置
+# 大多数项目如果目录名 == 项目名，可以省略
+projects:
+  # 目录名与项目文件名不同，或在子目录下的项目
+  finance_server: FINANCE/finance_server
+  ct_finance_server: FINANCE/ct_finance_server
+  clearing_server: FINANCE/clearing_server
+  invoice-server: FINANCE/invoice-server
+  reconciliation_server: FINANCE/reconciliation_server
+  bank_ability_center: FINANCE/bank_ability_center
+  unionpay_acquire_server: FINANCE/unionpay_acquire_server
+  cncb-emanager-server: FINANCE/cncb-emanager-server
+  ct_finance_server: FINANCE/ct_finance_server
+
+  base_server: omp/base_server
+  activity_server: omp/activity_server
+  statistics_server: omp/statistics_server
+  price_center_server: omp/price_center_server
+  open_api_server: omp/open_api_server
+  device-status: omp/device-status
+  status-server: omp/status-server
+  event_tracing_server: omp/event_tracing_server
+  foundation: omp/foundation
+  foundation-c: omp/foundation-c
+
+  charge-server: TRADE/charge-server
+  charge-business-server: TRADE/charge-business-server
+  flow-charge-server: TRADE/flow-charge-server
+  trade-order-server: TRADE/trade-order-server
+  trade-sync-server: TRADE/trade-sync-server
+  order-foundation: TRADE/order-foundation
+  crop-order-server: TRADE/crop-order-server
+  poly_server: TRADE/poly_server
+  poly-statistics-server: TRADE/poly-statistics-server
+  mq-consumer: TRADE/mq-consumer
+  alarm-server: TRADE/alarm-server
+  guan-zhong: TRADE/guan-zhong
+  hangu: TRADE/hangu
+
+  omp-shop: Front/omp-shop
+
+  agent-foundation: LLM/agent-foundation
+  agent-hands: LLM/agent-hands
+  cccc: LLM/cccc
+  prompt-management: LLM/prompt-management
+  requirement-harvester: LLM/requirement-harvester
+  ykc-dev: LLM/ykc-dev

@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | Java 后端（扫描：Java/Maven） |
-| 代码根路径 | `/Users/dongmaowei/workspace/projects/TRADE/guan-zhong` |
+| 代码根路径 | `TRADE/guan-zhong` |
 | SLS 容器名 | 待从部署或 `application*.yml` 的 `spring.application.name` 核对 |
 | 关联数据库 | 待从配置核对 |
 | 所属端 | C端（App 侧调用后端的入口应用） |

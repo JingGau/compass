@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | 前端 Vue 2（Vue CLI） |
-| 代码根路径 | `/Users/dongmaowei/workspace/projects/Front/omp-shop` |
+| 代码根路径 | `Front/omp-shop` |
 | 所属端 | B端（OMP 商户后台） |
 | 一句话职责 | 云快充商城/运营商后台：路由 + 业务页面 + 经 /ompApi 调后端 |
 | 技术栈 | Vue 2.7 + Vue Router 3 + Vuex 3 + Element UI 2 + axios |

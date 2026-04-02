@@ -41,7 +41,7 @@ AI: 要扫描哪个前端项目？
   - `/order/` → order_server
   - `/base/` → base_server
   - `/charge/` → charge_server
-  - 等等（参考 workspace-index.yaml 中的项目列表）
+  - 等等（参考 `config/code-repos.yaml` 中的 `projects` 映射）
 - 输出：后端服务清单 + 每个服务对应的接口列表
 
 ### Step 3：生成前端项目文件
@@ -56,7 +56,7 @@ AI: 要扫描哪个前端项目？
 对 Step 2.4 识别出的每个后端服务：
 
 **4.1 定位代码路径**
-- 参考 workspace-index.yaml 找到服务的代码目录
+- 参考 `config/code-repos.yaml` 的 `projects` 映射，拼接 `code_root` + 相对路径得到绝对路径
 - 如果找不到，问用户确认路径
 
 **4.2 扫描 Controller 层**（选项 B 和 C 都执行）

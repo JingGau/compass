@@ -5,7 +5,7 @@
 | 属性 | 值 |
 |------|----|
 | 服务类型 | 混合/工具/文档型仓库（扫描：Node + Python） |
-| 代码根路径 | `/Users/dongmaowei/workspace/projects/LLM/cccc` |
+| 代码根路径 | `LLM/cccc` |
 | SLS 容器名 | 待从部署或 `application*.yml` 的 `spring.application.name` 核对 |
 | 关联数据库 | 待从配置核对 |
 | 所属端 | 内部工具 |
