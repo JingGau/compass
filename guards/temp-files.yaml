@@ -6,10 +6,11 @@ base_dir: "/tmp/investigation"
 
 # 目录结构
 # /tmp/investigation/
-#   └── {session_id}/           # 每次排查一个目录
+#   └── {session_id}/               # 每次排查一个目录
 #       ├── sls_1711612800.jsonl    # SLS 查询结果
 #       ├── mysql_1711612801.csv    # MySQL 查询结果
-#       └── summary.md             # 排查摘要（可选）
+#       ├── sls_1711612800.exported # 用户导出标记（阻止自动清理）
+#       └── summary.md              # 排查摘要（可选）
 
 # Session ID 规则
 session_id:
@@ -37,11 +38,52 @@ lifecycle:
 
 # 清理规则
 cleanup:
+  # 主触发：Step 8 策略归档完成后自动执行，不单独询问用户
+  # 用户已在归档反馈环节交互过一次，清理不再打扰
+  on_strategy_archived: true
+  # 兜底触发：会话异常结束时也自动清理
   on_session_end: true
-  on_session_end_ask_user: true
+  # 不再单独询问，归档流程已覆盖交互
+  on_session_end_ask_user: false
   stale_threshold_hours: 24
   stale_auto_delete: true
-  cleanup_message: "排查结束，临时文件已清理。如需保留，请提前说「导出结果」"
+
+  # 例外：用户说过「导出结果」的文件不自动删除
+  preserve_if_exported: true
+  # 用户触发导出时，在同目录写一个同名 .exported 标记文件阻止清理
+  exported_marker_ext: ".exported"
+
+  # 清理简报：附在 Step 8 归档简报末尾，不单独输出一条消息
+  cleanup_message: "临时文件已清理（{n} 个文件，{size_mb}MB）。如需保留请提前说「导出结果」。"
+
+# 下钻读取规则（供 result-analysis.md Phase 4 使用）
+drilldown:
+  # 只读当前 session 目录，不跨 session 访问
+  base_path: "/tmp/investigation/{session_id}/"
+  default_batch_size: 10      # 「看更多」每次加载条数
+  max_batch_size: 100         # 单次下钻上限，防止一次性撑满上下文
+  context_lines: 2            # grep 时返回匹配行上下各 2 行
+
+  # 各操作对应的文件读取方式
+  operations:
+    load_next:
+      trigger: "「看更多日志」/ 「继续」"
+      action: "顺序读取下一批，记录并更新当前 offset"
+    filter_time:
+      trigger: "「看 14:30-14:32 的」"
+      action: "按 time 字段过滤，jsonl 逐行扫描匹配时间范围"
+    filter_level:
+      trigger: "「看所有 ERROR」"
+      action: "按 level 字段过滤，返回匹配条目"
+    filter_lines:
+      trigger: "「看第 200-210 条」"
+      action: "按行号 seek 直接定位，不全量加载"
+    grep:
+      trigger: "「搜索 xxx 关键字」"
+      action: "全文 grep，返回匹配行及上下 context_lines 行"
+    export:
+      trigger: "「导出结果」"
+      action: "告知完整文件路径；在同目录写 {filename}.exported 标记，阻止自动清理"
 
 # 并发安全
 concurrency:

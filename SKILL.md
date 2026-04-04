@@ -184,9 +184,9 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 | 3 | 代码理解 | 有 projects/ 注册项目时执行；否则跳过 | 读 `projects/<服务名>.md`；提取核心类、日志关键字、表名、Redis key 模式；结果带入 Step 4 | 代码导航完成或跳过声明已输出 | `prompts/query-planning.md` Step 0 |
 | 4 | 查询规划 | Step 3 完成后，首轮回复末尾 | 环境探查 → 策略匹配（Top 3 + 0/M）→ 入轨声明（🔵🟡🟢）→ 步骤表格展示 → **等待用户确认模式和入轨** | 用户回复确认编号或 M | `prompts/query-planning.md` |
 | 5 | 安全门控 | 每次调用 adapter 前逐次触发 | prod SQL **强卡** EXPLAIN 三档（🟢自动/🟡等确认/🔴必须明确确认）；外部库强卡确认；结果展示前脱敏 | 门控通过或用户确认 | `guards/sql-safety.md` 等 |
-| 6 | 执行查询 | Step 5 通过后立即执行 | 按所选模式推进：自动模式全跑输出进度表；手动模式每步停下确认工具/轨道；空结果最多重试 3 次后强制暂停 | 三轨收敛或路径耗尽 | `adapters/<n>/client.py` + `prompts/query-planning.md` |
+| 6 | 执行查询 | Step 5 通过后立即执行 | 按所选模式推进：自动模式全跑输出进度表；手动模式每步停下确认工具/轨道；**日志轨强制走四步：关键字查日志 → 提取链路ID（traceId/tlogId）→ 拉全链路 → 触发代码轨**；空结果最多重试 3 次后强制暂停 | 三轨收敛或路径耗尽 | `adapters/<n>/client.py` + `prompts/query-planning.md` |
 | 7 | 结果分析 | Step 6 收敛后自动进入 | 输出结论卡片 → 排查过程卡片（技术用户）→ 查询结果明细 → 建议操作；业务用户跳过过程卡片 | 结论卡片 + 操作选项已输出 | `prompts/result-analysis.md` |
-| 8 | 策略归档 | 用户选「结束排查」或排查自然结束 | 将本次排查路径、有效关键字、根因标签写入 strategies.yaml；更新匹配度评分；需用户确认 | 用户确认归档或跳过 | `prompts/strategy-improvement.md` |
+| 8 | 策略归档 | **Step 7 结论卡片输出完毕后自动触发，不等用户说结束** | 向用户收集反馈评分 → 将本次排查路径、有效关键字、根因标签写入 strategies.yaml → 更新匹配度评分；**不可跳过** | 反馈收集完毕，归档简报已输出 | `prompts/strategy-improvement.md` |
 
 > **低阶模型**：读 `prompts/lite-flow.md`，4步精简流程。
 
