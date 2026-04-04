@@ -181,7 +181,7 @@ SLS 查询结果概览：
 | 关键发现内联 | 每步的决定性数据直接写在该行，不另起段落 |
 | 轨道流转标注 | 跨轨道跳转时注明触发原因（如「日志中发现类名 → 转代码轨」） |
 | 失败步骤不隐藏 | 查无结果或报错的步骤照常列出，标注原因 |
-| EXPLAIN 结果内联 | prod SQL 步骤须标注 EXPLAIN 通过/危险及关键指标 |
+| EXPLAIN 结果内联 | prod SQL 步骤须按 `guards/sql-safety.md`「内联标注规范」标注风险等级和关键指标 |
 
 **模板：**
 
@@ -192,7 +192,7 @@ SLS 查询结果概览：
 > |------|------|------------|------|---------|------|
 > | 1 | 🔵 代码 | 本地代码库 | 读 `WalletServiceImpl.adjustBalance` | 日志关键字：`adjustBalance`；涉及表：`t_user_wallet`；Redis key 模式：`wallet:balance:{orgId}:{userId}` | ✅ |
 > | 2 | 🟢 数据 | redis / prod | 查 `wallet:balance:789:123456` | 缓存值：`0`，TTL 已过期 ⚠️ 与 DB 不一致 | ✅ |
-> | 3 | 🟢 数据 | mysql / test（EXPLAIN ✅ type=range, rows≈1） | `SELECT` `t_user_wallet` WHERE `user_id=123456` | `available_amount=200.00`，`update_time=12:15:00` ✅ DB 正常 | ✅ |
+> | 3 | 🟢 数据 | mysql / prod（EXPLAIN ✅ type=range, rows≈1,200, key=idx_user_id） | `SELECT` `t_user_wallet` WHERE `user_id=123456` | `available_amount=200.00`，`update_time=12:15:00` ✅ DB 正常 | ✅ |
 > | 4 | 🟡 日志 | sls / prod | 关键字 `adjustBalance` + `userId=123456`，时间窗 12:00~14:30 | 命中 8 条；12:15:03 `RedisConnectionException: timeout` → 缓存刷新失败 ❌ | ✅ |
 > | 5 | 🔵 代码 | 本地代码库（由 Step 4 日志类名触发） | 读 `CacheRefreshHandler.retryCache` | 重试策略：3 次后放弃，无异步补偿机制 → 缓存永久失效 ⚠️ | ✅ |
 >
@@ -205,7 +205,7 @@ SLS 查询结果概览：
 **失败步骤示例：**
 
 ```markdown
-> | 3 | 🟢 数据 | mysql / test（EXPLAIN ⚠️ type=ALL, rows≈230万，已暂停） | — | 用户取消执行，跳过此步 | ❌ 跳过 |
+> | 3 | 🟢 数据 | mysql / prod（EXPLAIN 🔴 type=ALL, rows≈230万，用户跳过） | — | 用户取消执行，跳过此步 | ❌ 跳过 |
 > | 4 | 🟡 日志 | sls / prod | 关键字 `wallet_sync`，时间窗 12:00~14:30 | 无匹配结果，换关键字重试 3 次仍空 | ⚠️ 未证实 |
 ```
 

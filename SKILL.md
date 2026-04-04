@@ -89,34 +89,17 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 ## SQL 安全门控（prod 环境专属）
 
-> 所有 prod 环境 SQL 在执行前必须先运行 EXPLAIN，AI 分析结果后判断是否危险。
+> 完整规则、风险三档定义、交互格式、内联标注规范统一见 `guards/sql-safety.md`，本文件不重复定义。
 
-**危险判定标准（满足任一即为危险）：**
+**核心约束摘要（细节以 `guards/sql-safety.md` 为准）：**
 
-| 指标 | 危险条件 |
-|------|---------|
-| type 字段 | `ALL`（全表扫描） |
-| rows 字段 | 超过 **100 万** |
-| key 字段 | `NULL`（未命中任何索引） |
-| AI 综合判断 | 结合业务表大小、查询复杂度，AI 认为有性能风险 |
-
-**危险查询处理流程：**
-
-```
-1. 输出 EXPLAIN 结果摘要
-2. 标注危险原因（如：全表扫描 / 扫描行数 120万 / 未命中索引）
-3. 展示原始 SQL 供用户审阅
-4. 输出确认提示：
-
-⚠️ 该查询存在风险：[危险原因]
-建议优化：[可选，给出索引建议或改写思路]
-
-**[确认执行]** **[放弃]** **[我来改写 SQL]**
-
-5. 用户确认后执行；放弃则跳过该步，告知用户并询问下一步
-```
-
-**安全查询**：EXPLAIN 通过后自动执行，无需用户确认，输出「✅ EXPLAIN 通过，执行中…」。
+| 要点 | 说明 |
+|------|------|
+| 适用范围 | prod 环境所有 Doris/MySQL SQL，强制执行；test/uat 跳过 |
+| 风险三档 | 🟢 低风险自动执行 / 🟡 中风险等待确认 / 🔴 高风险必须明确确认 |
+| 判定维度 | rows 行数 + type 是否全表扫描 + key 是否命中索引 + AI 综合判断 |
+| 分区表 | 缺少 `dt_month` 时自动补充，不打断用户 |
+| 用户改写 | 用户选「我来改写 SQL」后重新走 EXPLAIN 流程 |
 
 ---
 
@@ -146,7 +129,7 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 | 查询类型 | 必读文件 |
 |---------|---------|
-| SQL（prod） | `guards/sql-safety.md` + 本文件「SQL 安全门控」 |
+| SQL（prod） | `guards/sql-safety.md`（权威，含三档交互格式） |
 | SQL（test/uat） | `guards/sql-safety.md` |
 | Redis | `guards/redis-safety.md` |
 | ES | `guards/es-safety.md` |
@@ -192,16 +175,18 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 ## 排查流程
 
-| Step | 名称 | 详细逻辑 | 关键约束 |
-|------|------|---------|---------|
-| 1 | 实体提取 | `prompts/entity-extraction.md` | 只识别实体，不推荐查询 |
-| 2 | 场景分类 | `prompts/classify-scene.md` | 判断 C端/B端，匹配类别 |
-| 3 | 代码理解 | `prompts/query-planning.md` Step 0 | 有 projects 注册时执行，否则跳过 |
-| 4 | 查询规划 | `prompts/query-planning.md` | 环境探查→策略匹配→**三轨入轨声明**→方案展示→等待确认 |
-| 5 | 安全门控 | `guards/` 各文件 + 本文件「SQL 安全门控」 | 检查未通过禁止执行；prod SQL 必须先 EXPLAIN |
-| 6 | 执行查询 | `adapters/<n>/client.py` | 按所选模式执行（自动全跑/手动逐步确认）；空结果最多重试3次 |
-| 7 | 结果分析 | `prompts/result-analysis.md` | 结论卡片，独立可复制 |
-| 8 | 策略归档 | `prompts/strategy-improvement.md` | 收集反馈→归档→自优化 |
+> 总览表：8步顺序执行，不可跳步，不可并行。交互细节见各引用文件。
+
+| Step | 名称 | 触发条件 | 执行逻辑摘要 | 完成标志 | 引用 |
+|------|------|---------|------------|---------|------|
+| 1 | 实体提取 | 用户描述完问题，首轮回复中执行 | 识别 user_id / org_id / 订单号 / 服务名 / 时间范围等；缺失项标注 ❓ 并追问；只识别不推断 | 实体表格输出，追问已发出 | `prompts/entity-extraction.md` |
+| 2 | 场景分类 | Step 1 完成后，同在首轮回复中 | 判断 C端/B端；匹配 categories.yaml 类别；类别匹配度影响策略评分 | 场景 + 类别已输出 | `prompts/classify-scene.md` |
+| 3 | 代码理解 | 有 projects/ 注册项目时执行；否则跳过 | 读 `projects/<服务名>.md`；提取核心类、日志关键字、表名、Redis key 模式；结果带入 Step 4 | 代码导航完成或跳过声明已输出 | `prompts/query-planning.md` Step 0 |
+| 4 | 查询规划 | Step 3 完成后，首轮回复末尾 | 环境探查 → 策略匹配（Top 3 + 0/M）→ 入轨声明（🔵🟡🟢）→ 步骤表格展示 → **等待用户确认模式和入轨** | 用户回复确认编号或 M | `prompts/query-planning.md` |
+| 5 | 安全门控 | 每次调用 adapter 前逐次触发 | prod SQL **强卡** EXPLAIN 三档（🟢自动/🟡等确认/🔴必须明确确认）；外部库强卡确认；结果展示前脱敏 | 门控通过或用户确认 | `guards/sql-safety.md` 等 |
+| 6 | 执行查询 | Step 5 通过后立即执行 | 按所选模式推进：自动模式全跑输出进度表；手动模式每步停下确认工具/轨道；空结果最多重试 3 次后强制暂停 | 三轨收敛或路径耗尽 | `adapters/<n>/client.py` + `prompts/query-planning.md` |
+| 7 | 结果分析 | Step 6 收敛后自动进入 | 输出结论卡片 → 排查过程卡片（技术用户）→ 查询结果明细 → 建议操作；业务用户跳过过程卡片 | 结论卡片 + 操作选项已输出 | `prompts/result-analysis.md` |
+| 8 | 策略归档 | 用户选「结束排查」或排查自然结束 | 将本次排查路径、有效关键字、根因标签写入 strategies.yaml；更新匹配度评分；需用户确认 | 用户确认归档或跳过 | `prompts/strategy-improvement.md` |
 
 > **低阶模型**：读 `prompts/lite-flow.md`，4步精简流程。
 
@@ -228,4 +213,4 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 > 执行时采用三轨协作法（代码/日志/数据交织推进），开始前必须声明入轨方式；
 > 自动模式下方案确认后全自动跑完，输出过程，无需中间确认；
 > 手动模式下每步停下来让用户确认工具/轨道后再执行；
-> prod 环境 SQL 必须先 EXPLAIN，危险查询须用户确认；内部 adapter 优先，JDBC 等外部库须用户确认。
+> prod 环境 SQL 必须先 EXPLAIN，低风险自动执行，中风险等待确认，高风险必须明确确认（细节见 `guards/sql-safety.md`）；内部 adapter 优先，JDBC 等外部库须用户确认。

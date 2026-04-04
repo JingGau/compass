@@ -13,7 +13,7 @@
 3. **内部 Adapter 优先**：通过 `adapters/<n>/client.py` 调用；JDBC / 外部库须用户确认后才能使用
 4. **空结果最多重试 3 次**，仍无结果停下来告知用户
 5. **环境探查（Step 0）不得跳过**：未读各 adapter `config.yaml` 前，不得假设工具可用
-6. **prod 环境 SQL 必须先 EXPLAIN**：通过后自动执行；危险则暂停等待用户确认
+6. **prod 环境 SQL 强卡 EXPLAIN**：按 `guards/sql-safety.md` 三档流程执行，任何模式（含自动模式）不可绕过；🟢 自动继续，🟡 等待确认，🔴 必须明确确认
 
 ---
 
@@ -25,7 +25,7 @@
 | 手动模式 | 用户选 M | 每步执行前停下来，让用户确认工具/轨道；确认后执行该步，再停下来 |
 
 > **强制暂停例外**（任何模式下都必须暂停）：
-> - prod SQL EXPLAIN 判定为危险
+> - prod SQL EXPLAIN 判定为 🟡 中风险或 🔴 高风险
 > - 需要使用外部库（JDBC / 非内部 adapter）
 > - 空结果重试 3 次仍无结果
 
@@ -158,36 +158,23 @@
 
 ### ▶ Step 5：SQL 安全门控（prod 环境）
 
-> prod 环境所有 SQL 在执行前必须先运行 EXPLAIN，自动判断是否危险。
+> 完整流程、风险三档、交互格式见 `guards/sql-safety.md`，本文件只做执行入口说明。
 
-**执行流程：**
-
-```
-1. 先执行 EXPLAIN <原始SQL>
-2. AI 分析 EXPLAIN 结果，判断是否触发危险条件：
-   - type = ALL（全表扫描）
-   - rows > 100万
-   - key = NULL（未命中索引）
-   - AI 综合判断有性能风险
-3a. 安全 → 输出「✅ EXPLAIN 通过（type=range, rows≈1200, key=idx_user_id），执行中…」→ 自动执行
-3b. 危险 → 输出危险报告 → 暂停等待用户确认
-```
-
-**危险报告格式：**
+**执行入口：**
 
 ```
-⚠️ EXPLAIN 检测到风险
-- 危险原因：全表扫描（type=ALL）/ 扫描行数 120万 / 未命中索引
-- 涉及表：t_user_wallet
-- 原始 SQL：
-  SELECT * FROM t_user_wallet WHERE status = 1
-
-建议优化：可考虑在 status 字段加索引，或增加 user_id 条件缩小范围
-
-**[确认执行]** **[放弃]** **[我来改写 SQL]**
+prod 环境 SQL 准备执行前
+  ↓
+强卡：执行 EXPLAIN {SQL}（任何模式不可绕过，含自动模式）
+  ↓
+🟢 rows<10万 + type≠ALL + key非NULL  →  输出「✅ EXPLAIN 通过…」→ 自动继续
+🟡 rows 10万~100万 或 key=NULL       →  黄色警告卡片，等待 **[确认执行]**
+🔴 rows>100万 或 type=ALL 或 AI判断  →  红色警告卡片，必须明确回复「确认执行」
 ```
 
-> test / uat 环境：跳过 EXPLAIN 流程，直接执行。
+**结果内联标注**（排查过程卡片工具/环境列）：见 `guards/sql-safety.md`「EXPLAIN 结果内联标注规范」。
+
+> test / uat 环境：只走白名单检查，跳过 EXPLAIN，直接执行。
 
 ---
 
@@ -298,8 +285,9 @@
 | Step | 状态 | 耗时 | 结果摘要 | 下一步 |
 |------|------|------|---------|--------|
 | 1 — 读代码 | ✅ 完成 | — | 关键字: adjustBalance, 涉及表: t_user_wallet | → 查 SLS |
-| 2 — SLS 查日志 | ✅ EXPLAIN通过 → 完成 | 1.2s | 命中 8 条，traceId=abc123 | → 拉完整链路 |
-| 3 — 拉完整链路 | ⏳ 执行中 | — | — | — |
+| 2 — SLS 查日志 | ✅ 完成 | 1.2s | 命中 8 条，traceId=abc123 | → 拉完整链路 |
+| 3 — 查 DB（EXPLAIN ✅ type=range, rows≈1,200） | ✅ 完成 | 0.8s | available_amount=200.00 ✅ | → 查 Redis |
+| 4 — 拉完整链路 | ⏳ 执行中 | — | — | — |
 ```
 
 ### 五、手动模式逐步提示
