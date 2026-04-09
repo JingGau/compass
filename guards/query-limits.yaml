@@ -53,3 +53,9 @@ elasticsearch:
 general:
   query_timeout_seconds: 30
   export_timeout_seconds: 120
+  max_retry_count: 3
+
+context_sensor:
+  warn_tokens: 40000
+  compress_tokens: 60000
+  emergency_tokens: 80000
