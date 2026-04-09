@@ -149,6 +149,36 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 ---
 
+## Harness 工具调用协议（v3 主线）
+
+> 从 v3 开始，流程控制以 `tools/` 工具返回信号为准，Prompt 仅负责步骤内推理与展示格式。
+
+### 必须调用的工具
+
+- `tools/session_state.py`：`read_state / write_state / mark_checkpoint / assert_step_complete / advance_step`
+- `tools/context_injector.py`：`get_context`（按步骤注入）
+- `tools/sensors.py`：`sense_flow_deviation / sense_query_result / sense_context_size / sense_log_track_progress`
+- `tools/compressor.py`：`compress`（体积超阈值时强制调用）
+
+### 每轮最小调用顺序
+
+1. `read_state`
+2. `sense_flow_deviation`
+3. `get_context`
+4. （查询后）`sense_query_result + mark_checkpoint`
+5. （推进前）`assert_step_complete`
+6. （必要时）`sense_context_size -> compress`
+7. `advance_step`
+8. `write_state`
+
+### 强制门禁
+
+- `assert_step_complete.ok=false`：禁止推进，必须补完缺失项。
+- `sense_log_track_progress.complete=false`：禁止进入 Step 7。
+- `sense_context_size.action in {COMPRESS, EMERGENCY_COMPRESS}`：必须先压缩再继续。
+
+---
+
 ## 能力注册表
 
 ### Adapters

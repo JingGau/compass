@@ -7,7 +7,7 @@
 - 模型无法正确解析多个 YAML 文件
 - 用户说「简单点」
 
-> 高阶模型不要用这个文件，应走 SKILL.md 中的完整 8 步流程。
+> 高阶模型不要用这个文件，应走 SKILL.md 中的完整 8 步流程。低阶流程也必须遵守 Harness 门禁。
 
 ---
 
@@ -83,6 +83,7 @@
 - 只执行 SELECT 查询，禁止任何写操作
 - 手机号、身份证等展示时打码（如 138****1234）
 - 单次查询最多返回 100 条
+- 推进步骤前必须通过 `assert_step_complete`
 
 ### Step 4 — 给出结论
 
@@ -101,15 +102,15 @@
 
 ## 工具使用速查
 
-直接使用 MCP 工具，无需 Python：
+优先通过仓库内 adapter 客户端执行（与完整流程一致）：
 
-| 工具 | MCP 工具 | 说明 |
-|------|---------|------|
-| Platform | `mcp__mysql-client__*` | Doris 查询（仅 prod） |
-| SLS | `mcp__sls-client__query_logs` | 日志查询 |
-| MySQL | `mcp__mysql-client__execute_sql` | MySQL 查询 |
-| Redis | `mcp__redis-client__execute_command` | Redis 操作 |
-| ES | `mcp__elasticsearch-client__es_search` | ES 搜索 |
+| 工具 | 入口 | 说明 |
+|------|------|------|
+| Platform | `adapters/platform/client.py` | Doris 查询（仅 prod） |
+| SLS | `adapters/sls/client.py` | 日志查询 |
+| MySQL | `adapters/mysql/client.py` | MySQL 查询 |
+| Redis | `adapters/redis/client.py` | Redis 只读查询 |
+| ES | `adapters/elasticsearch/client.py` | ES 搜索 |
 
 ---
 
@@ -120,3 +121,4 @@
 3. **用户确认**：方案确认前不执行任何查询
 4. **一次只查一个方向**：不做多方案并行，降低复杂度
 5. **有问题就停**：查询报错时告诉用户，不要自己重试或绕过
+6. **流程门禁有效**：每步仍要经过 `session_state + sensors` 的最小校验
