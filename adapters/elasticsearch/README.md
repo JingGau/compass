@@ -20,7 +20,8 @@
 from adapters.elasticsearch.client import ESClient
 
 client = ESClient()          # 使用 config.yaml 中的 default_profile
-ok = client.health_check()   # 返回 bool
+health = client.health_check()   # 返回结构化状态字典
+# {"adapter":"elasticsearch","status":"ok|error|disabled","latency_ms":12,"environment":"test","error":None}
 ```
 
 ### 方法一览

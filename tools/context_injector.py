@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+from tools.env_config import int_env, load_dotenv
 
 
 @dataclass
@@ -23,6 +24,7 @@ def estimate_tokens(text: str) -> int:
 class ContextInjector:
     def __init__(self, root: str | Path = ".") -> None:
         self.root = Path(root)
+        load_dotenv(self.root)
         self.context_limits = self._load_yaml(self.root / "guards/context-limits.yaml")
 
     def get_context(self, step: int, scene: str, state: dict[str, Any]) -> ContextPackage:
@@ -34,7 +36,10 @@ class ContextInjector:
         }
         serialized = f"{main_prompt}\n{snapshot}"
         tokens = estimate_tokens(serialized)
-        max_tokens = int(self.context_limits["per_injection"]["max_tokens"])
+        max_tokens = int_env(
+            "HARN_PER_INJECTION_MAX_TOKENS",
+            int(self.context_limits["per_injection"]["max_tokens"]),
+        )
         if tokens > max_tokens:
             serialized = serialized[: max_tokens * 4]
             tokens = estimate_tokens(serialized)

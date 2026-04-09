@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import unittest
 
+from tools.context_injector import ContextInjector
 from tools.sensors import (
     sense_context_size,
     sense_flow_deviation,
@@ -11,6 +13,13 @@ from tools.sensors import (
 
 
 class SensorsTest(unittest.TestCase):
+    def test_context_injector_reads_env_override(self) -> None:
+        os.environ["HARN_PER_INJECTION_MAX_TOKENS"] = "5"
+        injector = ContextInjector(".")
+        pkg = injector.get_context(step=1, scene="C端", state={"flow": {}, "entities": {}})
+        self.assertLessEqual(pkg.estimated_tokens, 5)
+        os.environ.pop("HARN_PER_INJECTION_MAX_TOKENS", None)
+
     def test_flow_deviation(self) -> None:
         ok = sense_flow_deviation(2, 2)
         self.assertEqual(ok["signal"], "FLOW_OK")

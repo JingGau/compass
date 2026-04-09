@@ -24,14 +24,15 @@ Client 已封装二次解析，调用方直接拿结构化结果。
 from adapters.platform.client import PlatformClient
 
 client = PlatformClient()
-ok = client.health_check()
+health = client.health_check()
+# {"adapter":"platform","status":"ok|error|disabled","latency_ms":12,"environment":"prod","error":None}
 ```
 
 ### 方法一览
 
 | 方法 | 用途 | 返回 data 结构 |
 |------|------|--------------|
-| `health_check()` | 验证连通性 | bool |
+| `health_check()` | 验证连通性 | `{adapter,status,latency_ms,environment,error}` |
 | `query_sql(sql)` | 执行 SELECT SQL | `{columns, rows, result}` |
 | `count(sql)` | 预估查询总条数（先 count 再决定是否查） | int |
 | `export_async(sql)` | 创建异步导出任务（大结果集） | `{task_id}` |

@@ -11,14 +11,21 @@ if str(ROOT) not in sys.path:
 
 from tools.compressor import compress
 from tools.context_injector import ContextInjector
+from tools.env_config import int_env, load_dotenv
 from tools.sensors import sense_context_size, sense_flow_deviation, sense_log_track_progress, sense_query_result
 from tools.session_state import SessionState
 
 
 def main() -> int:
     root = ROOT
+    load_dotenv(root)
+    runtime = root / "runtime"
+    runtime.mkdir(parents=True, exist_ok=True)
+    demo_state = runtime / "demo-session-state.yaml"
+    if demo_state.exists():
+        demo_state.unlink()
     sm = SessionState(
-        state_path=root / "memory/session-state.yaml",
+        state_path=demo_state,
         flow_checkpoints_path=root / "guards/flow-checkpoints.md",
     )
     injector = ContextInjector(root=root)
@@ -86,11 +93,17 @@ def main() -> int:
 
     state = sm.read_state()
     limits = yaml.safe_load((root / "guards/query-limits.yaml").read_text(encoding="utf-8"))
+    warn_tokens = int_env("HARN_CONTEXT_WARN_TOKENS", int(limits["context_sensor"]["warn_tokens"]))
+    compress_tokens = int_env("HARN_CONTEXT_COMPRESS_TOKENS", int(limits["context_sensor"]["compress_tokens"]))
+    emergency_tokens = int_env(
+        "HARN_CONTEXT_EMERGENCY_TOKENS",
+        int(limits["context_sensor"]["emergency_tokens"]),
+    )
     sig = sense_context_size(
         current_tokens=65000,
-        warn=limits["context_sensor"]["warn_tokens"],
-        compress=limits["context_sensor"]["compress_tokens"],
-        emergency=limits["context_sensor"]["emergency_tokens"],
+        warn=warn_tokens,
+        compress=compress_tokens,
+        emergency=emergency_tokens,
     )
     print("[context_sensor]", sig)
     if sig["action"] in {"COMPRESS", "EMERGENCY_COMPRESS"}:
