@@ -19,6 +19,7 @@ memory/strategies.yaml
 memory/archived-strategies.yaml
 memory/audit-log.yaml
 memory/audit-archive/
+memory/session-state.yaml
 
 # Python
 __pycache__/
@@ -27,6 +28,7 @@ __pycache__/
 
 # 排查临时文件
 /tmp/
+runtime/
 
 # OS
 .DS_Store
