@@ -5,6 +5,7 @@ SLS 日志查询 Adapter
 """
 
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
@@ -76,20 +77,22 @@ class SLSClient(BaseAdapter):
             raise ValueError(f"环境 '{env}' 未配置 SLS project，可用: {list(projects.keys())}")
         return project
 
-    def health_check(self) -> bool:
-        """验证连通性：列出 default_env 对应 project 的 logstore，返回 True/False。"""
+    def health_check(self) -> dict:
+        """验证连通性：列出 default_env 对应 project 的 logstore，返回标准结构。"""
         if not self._enabled:
-            return False
+            return self._health_payload(status="disabled", environment=self._cfg.get("default_env", "prod"))
         try:
+            start = time.perf_counter()
             from aliyun.log import ListLogstoresRequest
             default_env = self._cfg.get("default_env", "prod")
             client, env = self._get_client(default_env)
             project = self._get_project(default_env)
             req = ListLogstoresRequest(project)
             client.list_logstores(req)
-            return True
-        except Exception:
-            return False
+            elapsed = int((time.perf_counter() - start) * 1000)
+            return self._health_payload(status="ok", latency_ms=elapsed, environment=env)
+        except Exception as e:
+            return self._health_payload(status="error", environment=self._cfg.get("default_env", "prod"), error=str(e))
 
     def list_logstores(self, env: Optional[str] = None) -> dict:
         """列出指定环境的所有 logstore。"""
@@ -216,9 +219,9 @@ class SLSClient(BaseAdapter):
 
 if __name__ == "__main__":
     client = SLSClient()
-    ok = client.health_check()
-    print(f"SLS health_check: {'✅ 连通' if ok else '❌ 失败'}")
-    if ok:
+    hc = client.health_check()
+    print(f"SLS health_check: {hc}")
+    if hc["status"] == "ok":
         result = client.list_logstores()
         if result["success"]:
             print(f"Logstores: {result['data']}")

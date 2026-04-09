@@ -16,6 +16,7 @@ Redis 命令安全分级（供 guards 层和 AI 规划参考，client 本身仅�
 from __future__ import annotations
 
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -65,13 +66,19 @@ class RedisClient(MultiProfileAdapter):
                 )
         return self._connections[name]
 
-    def health_check(self) -> bool:
+    def health_check(self) -> dict:
+        profile = self._get_profile()
         if not self._enabled:
-            return False
+            return self._health_payload(status="disabled", environment=profile.get("env"))
         try:
-            return self._get_connection().ping()
-        except Exception:
-            return False
+            start = time.perf_counter()
+            ok = self._get_connection().ping()
+            elapsed = int((time.perf_counter() - start) * 1000)
+            if ok:
+                return self._health_payload(status="ok", latency_ms=elapsed, environment=profile.get("env"))
+            return self._health_payload(status="error", environment=profile.get("env"), error="ping=false")
+        except Exception as e:
+            return self._health_payload(status="error", environment=profile.get("env"), error=str(e))
 
     def get_value(self, key: str, profile_name: Optional[str] = None) -> dict:
         """
@@ -172,9 +179,9 @@ class RedisClient(MultiProfileAdapter):
 
 if __name__ == "__main__":
     client = RedisClient()
-    ok = client.health_check()
-    print(f"Redis health_check: {'✅ 连通' if ok else '❌ 失败'}")
-    if ok:
+    hc = client.health_check()
+    print(f"Redis health_check: {hc}")
+    if hc["status"] == "ok":
         r = client.info("keyspace")
         if r["success"]:
             print(f"Keyspace: {r['data']}")

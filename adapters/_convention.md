@@ -20,8 +20,9 @@ adapters/<name>/
 def __init__(self, config_path: Optional[str] = None):
     # 从 config.yaml 加载配置，config_path 默认为同目录下的 config.yaml
 
-def health_check(self) -> bool:
-    # 验证连通性，返回 True/False，不抛出异常
+def health_check(self) -> dict:
+    # 验证连通性，返回标准结构，不抛出异常
+    # {"adapter": "...", "status": "ok|error|disabled", "latency_ms": 12, "environment": "prod", "error": None}
 ```
 
 **返回格式统一：**

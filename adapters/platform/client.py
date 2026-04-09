@@ -11,6 +11,7 @@ Platform 数据查询 Adapter
 import json
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Any, Optional
 
@@ -125,12 +126,16 @@ class PlatformClient(BaseAdapter):
                     "error": "拒绝执行写/DDL 语句，本 adapter 仅支持 SELECT/SHOW/DESC"}
         return None
 
-    def health_check(self) -> bool:
-        """验证连通性：执行一条简单 SQL，返回 True/False。"""
+    def health_check(self) -> dict:
+        """验证连通性：执行一条简单 SQL，返回标准结构。"""
         if not self._enabled:
-            return False
+            return self._health_payload(status="disabled", environment="prod")
+        start = time.perf_counter()
         result = self._call("query_doris", {"sql": "SELECT 1"})
-        return result["success"]
+        elapsed = int((time.perf_counter() - start) * 1000)
+        if result["success"]:
+            return self._health_payload(status="ok", latency_ms=elapsed, environment="prod")
+        return self._health_payload(status="error", latency_ms=elapsed, environment="prod", error=result["error"])
 
     def query_sql(self, sql: str) -> dict:
         """
@@ -207,9 +212,9 @@ class PlatformClient(BaseAdapter):
 
 if __name__ == "__main__":
     client = PlatformClient()
-    ok = client.health_check()
-    print(f"Platform health_check: {'✅ 连通' if ok else '❌ 失败'}")
-    if ok:
+    hc = client.health_check()
+    print(f"Platform health_check: {hc}")
+    if hc["status"] == "ok":
         result = client.list_databases()
         if result["success"]:
             data = result["data"]

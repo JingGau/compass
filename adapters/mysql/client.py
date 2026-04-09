@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
@@ -93,19 +94,21 @@ class MySQLClient(MultiProfileAdapter):
             cursorclass=pymysql.cursors.DictCursor,
         )
 
-    def health_check(self) -> bool:
+    def health_check(self) -> dict:
         if not self._enabled:
-            return False
+            return self._health_payload(status="disabled", environment=self._get_profile().get("env"))
         try:
+            start = time.perf_counter()
             conn = self._connect(self._get_profile())
             try:
                 with conn.cursor() as cur:
                     cur.execute("SELECT 1")
             finally:
                 conn.close()
-            return True
-        except Exception:
-            return False
+            elapsed = int((time.perf_counter() - start) * 1000)
+            return self._health_payload(status="ok", latency_ms=elapsed, environment=self._get_profile().get("env"))
+        except Exception as e:
+            return self._health_payload(status="error", environment=self._get_profile().get("env"), error=str(e))
 
     def query_sql(self, sql: str, profile_name: Optional[str] = None,
                   limit: Optional[int] = None, offset: Optional[int] = None) -> dict:
@@ -238,9 +241,9 @@ if __name__ == "__main__":
     result = client.list_profiles()
     if result["success"]:
         print(f"可用 profiles: {[p['name'] for p in result['data']]}")
-    ok = client.health_check()
-    print(f"MySQL health_check: {'✅ 连通' if ok else '❌ 失败'}")
-    if ok:
+    hc = client.health_check()
+    print(f"MySQL health_check: {hc}")
+    if hc["status"] == "ok":
         result = client.list_tables()
         if result["success"]:
             tables = result["data"]["tables"]

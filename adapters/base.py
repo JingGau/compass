@@ -126,6 +126,21 @@ class BaseAdapter:
             return self._disabled_response()
         return None
 
+    def _health_payload(
+        self,
+        status: str,
+        latency_ms: int | None = None,
+        environment: str | None = None,
+        error: str | None = None,
+    ) -> dict:
+        return {
+            "adapter": self.ADAPTER_NAME,
+            "status": status,
+            "latency_ms": latency_ms,
+            "environment": environment,
+            "error": error,
+        }
+
 
 class MultiProfileAdapter(BaseAdapter):
     """

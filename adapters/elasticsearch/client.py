@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import time
 import urllib.request
 import urllib.error
 from pathlib import Path
@@ -199,14 +200,20 @@ class ESClient(MultiProfileAdapter):
             self._versions[name] = es_major
         return self._ops[name]
 
-    def health_check(self) -> bool:
+    def health_check(self) -> dict:
+        profile = self._get_profile()
         if not self._enabled:
-            return False
+            return self._health_payload(status="disabled", environment=profile.get("env"))
         try:
+            start = time.perf_counter()
             ops = self._get_ops()
-            return ops.ping()
-        except Exception:
-            return False
+            ok = ops.ping()
+            elapsed = int((time.perf_counter() - start) * 1000)
+            if ok:
+                return self._health_payload(status="ok", latency_ms=elapsed, environment=profile.get("env"))
+            return self._health_payload(status="error", environment=profile.get("env"), error="ping=false")
+        except Exception as e:
+            return self._health_payload(status="error", environment=profile.get("env"), error=str(e))
 
     def list_indices(self, pattern: str = "*", profile_name: Optional[str] = None) -> dict:
         if not self._enabled:
@@ -284,9 +291,9 @@ class ESClient(MultiProfileAdapter):
 
 if __name__ == "__main__":
     client = ESClient()
-    ok = client.health_check()
-    print(f"ES health_check: {'✅ 连通' if ok else '❌ 失败'}")
-    if ok:
+    hc = client.health_check()
+    print(f"ES health_check: {hc}")
+    if hc["status"] == "ok":
         result = client.list_indices()
         if result["success"]:
             indices = result["data"]
