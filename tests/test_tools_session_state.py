@@ -12,10 +12,10 @@ class SessionStateTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             mem = root / "memory" / "session-state.yaml"
-            guard = root / "guards" / "flow-checkpoints.md"
+            guard = root / "guards" / "flow-checkpoints.yaml"
             guard.parent.mkdir(parents=True, exist_ok=True)
             guard.write_text(
-                "## Step 1\n- flow.checkpoints.step_1.ready\n## Step 2\n- flow.checkpoints.step_2.done\n",
+                "steps:\n  step_1:\n    - ready\n  step_2:\n    - done\n",
                 encoding="utf-8",
             )
             sm = SessionState(state_path=mem, flow_checkpoints_path=guard)

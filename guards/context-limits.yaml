@@ -1,12 +1,5 @@
-context_window:
-  total_limit: 80000
-  warn_threshold: 40000
-  compress_threshold: 60000
-
-per_injection:
-  max_tokens: 8000
-  strategy_top_n: 3
-  topology_summary_max_chars: 300
+# 上下文管理由 agent 自行决定，以下为查询结果采样参考值
+# agent 可根据实际情况灵活调整
 
 sampling:
   sql_max_rows_in_context: 20

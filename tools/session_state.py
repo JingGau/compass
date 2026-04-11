@@ -23,7 +23,7 @@ class SessionState:
     def __init__(
         self,
         state_path: str | Path = "memory/session-state.yaml",
-        flow_checkpoints_path: str | Path = "guards/flow-checkpoints.md",
+        flow_checkpoints_path: str | Path = "guards/flow-checkpoints.yaml",
     ) -> None:
         self.state_path = Path(state_path)
         self.flow_checkpoints_path = Path(flow_checkpoints_path)
@@ -111,21 +111,9 @@ class SessionState:
     def _load_required_checkpoints(self, step: int) -> list[str]:
         if not self.flow_checkpoints_path.exists():
             return []
-        text = self.flow_checkpoints_path.read_text(encoding="utf-8")
-        required: list[str] = []
-        in_step = False
-        for raw in text.splitlines():
-            line = raw.strip()
-            if line.startswith("## Step "):
-                in_step = line == f"## Step {step}"
-                continue
-            if not in_step:
-                continue
-            if line.startswith("- ") and ".checkpoints.step_" in line:
-                # 形如: - flow.checkpoints.step_4.query_plan_shown
-                name = line.split(".")[-1]
-                required.append(name)
-        return required
+        with self.flow_checkpoints_path.open("r", encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        return data.get("steps", {}).get(f"step_{step}", [])
 
     def _save(self, state: dict[str, Any]) -> None:
         with self.state_path.open("w", encoding="utf-8") as f:

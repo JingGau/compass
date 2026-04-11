@@ -1,0 +1,27 @@
+# Flow Checkpoints — machine-readable format
+# 详细说明见 flow-checkpoints.md
+
+steps:
+  step_1:
+    - entities_extracted
+    - questions_asked_if_missing
+  step_2:
+    - scene_classified
+    - category_matched
+  step_3:
+    - code_or_page_mapped
+  step_4:
+    - query_plan_shown
+    - track_declared
+    - user_confirmed_mode
+  step_5:
+    - safety_gate_passed
+  step_6:
+    - execution_started
+    - execution_completed
+  step_7:
+    - conclusion_output
+    - analysis_complete
+  step_8:
+    - feedback_collected
+    - strategy_archived

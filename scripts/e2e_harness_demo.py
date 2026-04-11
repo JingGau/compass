@@ -3,8 +3,6 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
-import yaml
-
 ROOT = Path(__file__).resolve().parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
@@ -26,7 +24,7 @@ def main() -> int:
         demo_state.unlink()
     sm = SessionState(
         state_path=demo_state,
-        flow_checkpoints_path=root / "guards/flow-checkpoints.md",
+        flow_checkpoints_path=root / "guards/flow-checkpoints.yaml",
     )
     injector = ContextInjector(root=root)
 
@@ -92,13 +90,9 @@ def main() -> int:
     print("[step8] assert:", assert_result)
 
     state = sm.read_state()
-    limits = yaml.safe_load((root / "guards/query-limits.yaml").read_text(encoding="utf-8"))
-    warn_tokens = int_env("HARN_CONTEXT_WARN_TOKENS", int(limits["context_sensor"]["warn_tokens"]))
-    compress_tokens = int_env("HARN_CONTEXT_COMPRESS_TOKENS", int(limits["context_sensor"]["compress_tokens"]))
-    emergency_tokens = int_env(
-        "HARN_CONTEXT_EMERGENCY_TOKENS",
-        int(limits["context_sensor"]["emergency_tokens"]),
-    )
+    warn_tokens = int_env("HARN_CONTEXT_WARN_TOKENS", 40000)
+    compress_tokens = int_env("HARN_CONTEXT_COMPRESS_TOKENS", 60000)
+    emergency_tokens = int_env("HARN_CONTEXT_EMERGENCY_TOKENS", 80000)
     sig = sense_context_size(
         current_tokens=65000,
         warn=warn_tokens,

@@ -18,7 +18,7 @@ def main() -> int:
         ROOT / "tools/sensors.py",
         ROOT / "tools/compressor.py",
         ROOT / "tools/tool_protocol.md",
-        ROOT / "guards/flow-checkpoints.md",
+        ROOT / "guards/flow-checkpoints.yaml",
         ROOT / "memory/session-state.yaml",
         ROOT / "memory/strategies.yaml",
         ROOT / "knowledge/system-topology.md",

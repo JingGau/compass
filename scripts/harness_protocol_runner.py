@@ -74,10 +74,9 @@ def run_turn(sm: SessionState, injector: ContextInjector, declared_step: int, sc
         return {"ok": False, "stage": "assert", "signal": asdict(assert_result)}
 
     # 8) context size -> maybe compress
-    limits = yaml.safe_load((ROOT / "guards/query-limits.yaml").read_text(encoding="utf-8"))
-    warn_tokens = int_env("HARN_CONTEXT_WARN_TOKENS", int(limits["context_sensor"]["warn_tokens"]))
-    compress_tokens = int_env("HARN_CONTEXT_COMPRESS_TOKENS", int(limits["context_sensor"]["compress_tokens"]))
-    emergency_tokens = int_env("HARN_CONTEXT_EMERGENCY_TOKENS", int(limits["context_sensor"]["emergency_tokens"]))
+    warn_tokens = int_env("HARN_CONTEXT_WARN_TOKENS", 40000)
+    compress_tokens = int_env("HARN_CONTEXT_COMPRESS_TOKENS", 60000)
+    emergency_tokens = int_env("HARN_CONTEXT_EMERGENCY_TOKENS", 80000)
     size_signal = sense_context_size(
         current_tokens=int(context_pkg.estimated_tokens),
         warn=warn_tokens,
@@ -115,7 +114,7 @@ def main() -> int:
 
     sm = SessionState(
         state_path=protocol_state,
-        flow_checkpoints_path=ROOT / "guards/flow-checkpoints.md",
+        flow_checkpoints_path=ROOT / "guards/flow-checkpoints.yaml",
     )
     injector = ContextInjector(ROOT)
 
