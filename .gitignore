@@ -25,6 +25,7 @@ memory/session-state.yaml
 __pycache__/
 *.pyc
 .venv/
+.worktrees/
 
 # 排查临时文件
 /tmp/

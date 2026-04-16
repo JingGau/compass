@@ -159,17 +159,44 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 - `tools/context_injector.py`：`get_context`（按步骤注入）
 - `tools/sensors.py`：`sense_flow_deviation / sense_query_result / sense_context_size / sense_log_track_progress`
 - `tools/compressor.py`：`compress`（体积超阈值时强制调用）
+- `tools/action_cards.py`：`InvestigationAction / render_before_card / render_safety_gate_card / render_after_card / build_pending_confirmation`
+- `tools/sql_gate.py`：`assess_sql_explain`（prod SQL EXPLAIN 风险判定）
+- `tools/evidence_graph.py`：`EvidenceGraph`（沉淀页面、接口、方法、表、日志线索）
+
+### Action Card 协议（强制）
+
+任何查询、日志搜索、代码读取、Redis/ES 访问都必须先构造 `InvestigationAction`，再按统一协议执行。**禁止直接调用 adapter 或直接读代码后再补过程说明**。
+
+每个动作的强制顺序：
+
+1. 构造 `InvestigationAction`，写明目的、工具、环境、查询对象、成功标准。
+2. 输出 `render_before_card(action)`，让用户看到即将执行的内容。
+3. 输出对应 Safety Gate；SQL 使用 `assess_sql_explain` 后再 `render_safety_gate_card`。
+4. 若 `gate.requires_confirmation=true`，必须 `build_pending_confirmation` 并暂停；用户明确回复「确认执行」前禁止执行。
+5. 执行查询 / 读代码 / 拉日志。
+6. 构造 `ActionResult`，输出 `render_after_card(action, result)`。
+7. 将 `ActionResult.leads` 写入 `EvidenceGraph`，作为下一步候选来源。
+
+| 轨道 | 执行前必须展示 | 执行后必须提取 |
+|------|----------------|----------------|
+| SLS | query、时间范围、limit、容器/服务 | traceId/tlogId、接口、服务、异常时间、可继续查的代码/DB/链路 |
+| SQL | 完整 SQL、环境、EXPLAIN SQL 和风险 | 返回行数、关键字段、相关表、是否指向代码/日志 |
+| 代码 | 应用、文件/类/方法、来源线索 | 页面→接口→Controller→Service→Mapper→表、日志关键字、业务分支 |
+| Redis/ES | 命令/索引/查询体、范围限制 | key/index、命中摘要、是否指向 SQL/代码/日志 |
 
 ### 每轮最小调用顺序
 
 1. `read_state`
 2. `sense_flow_deviation`
 3. `get_context`
-4. （查询后）`sense_query_result + mark_checkpoint`
-5. （推进前）`assert_step_complete`
-6. （必要时）`sense_context_size -> compress`
-7. `advance_step`
-8. `write_state`
+4. （每个动作前）`InvestigationAction -> render_before_card -> Safety Gate`
+5. （风险需确认时）`build_pending_confirmation -> write_state -> 暂停`
+6. （执行后）`ActionResult -> render_after_card -> EvidenceGraph.add_result_leads`
+7. （查询后）`sense_query_result + mark_checkpoint`
+8. （推进前）`assert_step_complete`
+9. （必要时）`sense_context_size -> compress`
+10. `advance_step`
+11. `write_state`
 
 ### 强制门禁
 

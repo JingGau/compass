@@ -16,6 +16,8 @@
 5. **环境探查（Step 0）不得跳过**：未读各 adapter `config.yaml` 前，不得假设工具可用
 6. **prod 环境 SQL 强卡 EXPLAIN**：按 `guards/sql-safety.md` 三档流程执行，任何模式（含自动模式）不可绕过；🟢 自动继续，🟡 等待确认，🔴 必须明确确认
 7. **每步必须按顺序输出三块**：Before Block → Safety Gate Block → 执行 → After Block；任何一块缺失视为未完成，禁止继续下一步
+8. **每步必须先生成 Action Card**：用 `tools/action_cards.py` 表达本次动作；禁止直接调用 adapter、直接读代码、直接查日志后再补说明
+9. **所有 After Block 必须产出线索**：traceId/接口/方法/表/key/时间戳至少逐项说明「发现」或「未发现，已尝试什么」
 
 ---
 
@@ -56,6 +58,7 @@
 ## 📡 执行播报格式（Before / After Block）
 
 > **每一步查询，无论自动模式还是手动模式，都必须先输出 Before Block 再执行，执行完立即输出 After Block。这是强制格式，不可省略。**
+> Before/After 必须由 `InvestigationAction` 和 `ActionResult` 渲染，不允许自由发挥成散文。
 
 ### Before Block（执行前播报）
 
@@ -66,6 +69,16 @@
 - 查询对象：___（关键字 / 表名+字段 / Redis key 模式 / SLS 查询语句摘要）
 - 预期：看到 ___ 才算有价值；若为空则 ___
 ```
+
+不同轨道必须展开到可复核粒度：
+
+| 轨道 | Before 必须展示 |
+|------|------------------|
+| SLS | 完整搜索语句、时间范围、limit、容器/服务名 |
+| SQL | 完整 SQL；prod 还必须展示完整 EXPLAIN SQL |
+| 代码 | 应用名、文件/类/方法名、来源线索；B 端必须展示页面→API→后端入口的定位路径 |
+| Redis | 命令、key 模式、profile、范围限制 |
+| ES | index、query body、size/from/agg 限制 |
 
 ### After Block（执行后播报）
 
@@ -82,6 +95,7 @@
 ```
 
 > **「提取线索」是核心字段，不允许整行留空或写「无」。** 若某项真的未发现，必须写「未发现，已尝试：___」并说明原因。线索会被带入下一轨，是三轨不跑偏的唯一保障。
+> After Block 必须列出「可继续下钻」候选：可查代码、可查 SQL、可拉链路、可查日志、可查缓存中至少选出适用项。
 
 ---
 
@@ -127,6 +141,18 @@
 ```
 
 🟡/🔴 风险后输出警告卡片，格式见 `guards/sql-safety.md`，在此暂停等待用户操作。
+
+🟡/🔴 风险必须同时写入 `pending_confirmations`：
+
+```
+pending_confirmation:
+  action_id: Step N
+  gate_type: sql
+  risk_level: medium/high
+  required_reply: 确认执行
+```
+
+> 没有 pending_confirmation 记录，视为门禁未完成，禁止继续执行。
 
 ---
 
@@ -408,6 +434,18 @@ After Block 的「结果摘要」字段在 SLS 查询后必须补充采样说明
 - 下一步：→ 进入 🟢 数据轨，验证上述表名/key 的实际数据状态
 ```
 
+B 端页面问题必须优先形成页面调用链：
+
+```
+页面组件 → 前端 API 常量 → 后端 Controller → Service → Feign/Mapper → 表/缓存
+```
+
+每一段必须说明「为什么能连上」：
+- 页面组件中哪个方法触发请求
+- API 常量对应哪个 URL
+- Controller 的 `@RequestMapping` / 方法注解如何匹配 URL
+- Service/Mapper 如何决定业务含义和过滤口径
+
 ---
 
 #### 🟢 数据轨执行格式
@@ -428,6 +466,12 @@ After Block 的「结果摘要」字段在 SLS 查询后必须补充采样说明
     · 是否指向新的日志时间窗：___
 - 下一步：→ ___
 ```
+
+SQL 找到表后不得停在数据层，必须补充关系发现：
+- 这张表在哪些项目/Mapper/DAO 中被读写
+- 表字段与当前页面/接口入参的对应关系
+- 是否存在相关表、流水表、状态表、明细表、缓存 key
+- 是否能反推出日志关键字或接口路径
 
 ---
 

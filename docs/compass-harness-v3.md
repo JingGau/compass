@@ -21,6 +21,16 @@
 - 注入器的细粒度裁剪策略目前为最小可运行版本，后续可按服务和页面关键词继续精细化
 - 端到端场景回放测试仍需补充更多真实问题样本
 
+## 实现状态同步（2026-04-16）
+
+本轮在 v3 Harness 基础上补齐 **Action Card Protocol**，解决“执行前没有清晰展示要做什么、执行后没有结构化沉淀线索、高风险门禁没有形成可见确认入口”的问题：
+
+- 已新增 `tools/action_cards.py`，统一表达 `InvestigationAction / SafetyGateResult / ActionResult`，负责执行前卡片、门禁卡片、执行后卡片和 `pending_confirmation`。
+- 已新增 `tools/sql_gate.py`，解析 Doris EXPLAIN 中的 `cardinality / partitions / tablets / VOlapScanNode / predicates`，把 SQL 风险判定转成结构化 Safety Gate。
+- 已新增 `tools/evidence_graph.py`，把页面、API、方法、表、traceId、Redis key 等线索沉淀为证据图。
+- 已更新 `SKILL.md`、`tools/tool_protocol.md`、`prompts/query-planning.md`、`prompts/result-analysis.md`、`guards/sql-safety.md`，要求每个动作必须按 `Before Card → Safety Gate → 执行或暂停 → After Card → EvidenceGraph` 顺序推进。
+- 已新增单测覆盖 Action Card 渲染、高风险 SQL 确认、Doris EXPLAIN 风险判定、证据图节点/边生成。
+
 ---
 
 ## 目录
@@ -144,30 +154,154 @@ v2.0 里的 "强卡" 是文字声明，AI 可以选择不遵守。v3.0 里，每
 
 这样，约束从"AI 自觉"变成了"系统强制"。
 
-### 2.4 分层架构图
+### 2.4 完整运行架构图
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│                     SKILL.md（总入口）                            │
-│            流程骨架 · Harness 工具清单 · 调用协议引用              │
-└───────────────────────────┬──────────────────────────────────────┘
-                            │
-        ┌───────────────────┼──────────────────────┐
-        ▼                   ▼                      ▼
-┌──────────────┐   ┌────────────────┐   ┌──────────────────┐
-│  Harness 工具 │   │  Context 层     │   │  Prompt 层        │
-│  tools/       │   │  knowledge/    │   │  prompts/         │
-│  状态机        │   │  memory/       │   │  guards/          │
-│  注入器        │   │  projects/     │   │  SKILL.md 规则    │
-│  传感器        │   │  adapters/     │   │                  │
-│  压缩器        │   │  （被工具管理）  │   │                  │
-└──────┬───────┘   └────────────────┘   └──────────────────┘
-       │
-       ▼
-┌──────────────────────────────────────────────────────────────────┐
-│                    Adapter 能力层                                 │
-│           SLS · MySQL · Redis · ES · Platform（JDBC）            │
-└──────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              User / Operator                              │
+│         自然语言问题、截图、账号、订单号、时间范围、确认/跳过/改写指令        │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                            Prompt / Skill 层                               │
+│  SKILL.md                                                                  │
+│  ├─ 首轮模板：问题复述 / 实体识别 / 场景判断 / 方案确认                     │
+│  ├─ 强制规则：单线顺序、内部 adapter 优先、禁止写操作、结果脱敏              │
+│  └─ Action Card Protocol：任何动作前必须生成 InvestigationAction            │
+│                                                                            │
+│  prompts/                                                                  │
+│  ├─ query-planning.md：三轨协作、Before/After、Safety Gate、收敛门控         │
+│  └─ result-analysis.md：结论卡片、完整流程、证据图、推断链                  │
+│                                                                            │
+│  guards/                                                                   │
+│  ├─ sql-safety.md：prod SQL EXPLAIN 三档门禁 + pending_confirmation          │
+│  ├─ redis-safety.md / es-safety.md：只读白名单和范围限制                    │
+│  └─ data-masking.md：展示前脱敏                                             │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   │ 调用工具即协议
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              Harness 工具层                                 │
+│                                                                            │
+│  session_state.py                                                          │
+│  ├─ read_state / write_state                                               │
+│  ├─ mark_checkpoint / assert_step_complete / advance_step                   │
+│  └─ pending_confirmations：保存中/高风险等待用户确认的动作                  │
+│                                                                            │
+│  context_injector.py                                                       │
+│  └─ 按 Step 注入 prompts / guards / strategies / topology                   │
+│                                                                            │
+│  action_cards.py                                                           │
+│  ├─ InvestigationAction：执行前声明目的、工具、环境、查询对象、成功标准       │
+│  ├─ SafetyGateResult：门禁结果、风险等级、是否需要确认                       │
+│  ├─ ActionResult：执行后摘要、关键发现、提取线索、下一步候选                 │
+│  └─ render_before_card / render_safety_gate_card / render_after_card        │
+│                                                                            │
+│  sql_gate.py                                                               │
+│  └─ parse_doris_explain / assess_sql_explain                                │
+│                                                                            │
+│  evidence_graph.py                                                         │
+│  └─ 页面 / API / 方法 / 表 / traceId / key 节点与关系沉淀                   │
+│                                                                            │
+│  sensors.py / compressor.py                                                │
+│  ├─ 流程偏离、空结果、日志轨完成度、上下文体积检测                           │
+│  └─ 超阈值时压缩上下文                                                      │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   │ 只有门禁通过或用户确认后才能执行
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              Action Executor                               │
+│                                                                            │
+│  1. Plan Action                                                            │
+│     └─ 生成 InvestigationAction                                            │
+│  2. Render Before Card                                                     │
+│     └─ 展示 SLS query / SQL / 代码应用与方法 / Redis key / ES query         │
+│  3. Run Safety Gate                                                        │
+│     ├─ SQL：先 EXPLAIN，再按 rows/type/key/cardinality 判定风险             │
+│     ├─ SLS：时间范围、limit、上下文采样、字段裁剪                           │
+│     ├─ Redis/ES：只读命令、size/from/范围限制                               │
+│     └─ 外部库：内部 adapter 覆盖检查 + 用户确认                              │
+│  4. Pause or Execute                                                       │
+│     ├─ 🟢 低风险：自动执行                                                  │
+│     └─ 🟡/🔴/外部库：写 pending_confirmation，等待「确认执行」              │
+│  5. Render After Card                                                      │
+│     └─ 结果摘要、关键发现、提取线索、可继续下钻方向                         │
+│  6. Update EvidenceGraph                                                   │
+│     └─ 把线索转成下一步候选                                                 │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   │
+              ┌────────────────────┼────────────────────┐
+              ▼                    ▼                    ▼
+┌─────────────────────────┐ ┌─────────────────────────┐ ┌─────────────────────┐
+│        代码轨            │ │        日志轨            │ │       数据轨         │
+│                         │ │                         │ │                     │
+│ B 端页面调用链：          │ │ SLS 四步强制：            │ │ SQL / Redis / ES：    │
+│ 页面组件                 │ │ 1. 关键字宽查             │ │ 1. 表/key/index 定位  │
+│ → 前端 API 常量          │ │ 2. 提取 traceId/tlogId    │ │ 2. 安全门禁           │
+│ → Controller             │ │ 3. 拉全链路日志           │ │ 3. 数据状态核验       │
+│ → Service/Feign          │ │ 4. 提取线索触发代码轨      │ │ 4. 反查相关表/代码/日志│
+│ → Mapper/DAO             │ │                         │ │                     │
+│ → 表/缓存/日志关键字       │ │                         │ │                     │
+└────────────┬────────────┘ └────────────┬────────────┘ └──────────┬──────────┘
+             │                           │                         │
+             └───────────────────────────┼─────────────────────────┘
+                                         ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              Adapter 能力层                                │
+│                                                                            │
+│  adapters/sls              → SLS 日志查询（prod / test / uat，内部）         │
+│  adapters/mysql            → MySQL / PolarDB（test / uat，内部）             │
+│  adapters/redis            → Redis 只读查询（test / uat，内部）              │
+│  adapters/elasticsearch    → ES 全文检索（test-finance，内部）               │
+│  adapters/platform         → Doris 分析查询（prod，外部 JDBC，需确认）        │
+└──────────────────────────────────┬─────────────────────────────────────────┘
+                                   │
+                                   ▼
+┌────────────────────────────────────────────────────────────────────────────┐
+│                              输出与归档                                     │
+│                                                                            │
+│  result-analysis.md                                                        │
+│  ├─ 结论卡片：What / Where / When / Why / Blast Radius / How                │
+│  ├─ 完整排查流程：复用 Before / Safety Gate / After                         │
+│  ├─ EvidenceGraph 摘要：页面 → API → 方法 → 表 → 数据状态                    │
+│  └─ 建议：SQL 工单、代码修复、补日志、补索引、运营口径说明                   │
+│                                                                            │
+│  strategy-improvement.md                                                   │
+│  └─ 反馈评分、策略沉淀、审计日志、临时文件清理                              │
+└────────────────────────────────────────────────────────────────────────────┘
+```
+
+### 2.5 Action Card 执行时序图
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant P as Prompt/Skill
+    participant H as Harness
+    participant G as Safety Gate
+    participant A as Adapter/Code
+    participant E as EvidenceGraph
+
+    U->>P: 描述问题 / 选择模式
+    P->>H: read_state + get_context
+    P->>H: create InvestigationAction
+    H-->>U: Before Card（将执行什么）
+    H->>G: run gate / EXPLAIN / limit check
+    alt 低风险
+        G-->>H: passed
+        H->>A: execute
+    else 中高风险或外部库
+        G-->>H: requires_confirmation
+        H-->>U: Confirmation Card
+        U->>H: 确认执行 / 改写 SQL / 跳过
+        H->>A: execute only if confirmed
+    end
+    A-->>H: raw result
+    H-->>U: After Card（摘要、关键发现、线索、下一步）
+    H->>E: add_result_leads
+    E-->>P: next action candidates
+    P->>H: assert_step_complete / advance_step
 ```
 
 ---
@@ -185,6 +319,9 @@ compass/
 │   ├── context_injector.py           # 上下文注入器：按步骤精准裁剪内容
 │   ├── sensors.py                    # 传感器：结果质量/流程偏离/体积/日志轨
 │   ├── compressor.py                 # 压缩器：步骤间上下文摘要与丢弃
+│   ├── action_cards.py               # Action Card：执行前/门禁/执行后结构化卡片
+│   ├── sql_gate.py                   # SQL EXPLAIN 解析与风险判定
+│   ├── evidence_graph.py             # 证据图：页面/API/方法/表/日志线索关系
 │   └── tool_protocol.md              # 工具调用协议：AI 必须遵守的调用顺序和规则
 │
 ├── adapters/                         # 能力适配层（基本沿用 v2.0）

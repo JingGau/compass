@@ -111,6 +111,7 @@ AI 发现目标表是分区表但 SQL 中缺少 `dt_month` 时，自动从实体
 
 > 用户选「我来改写 SQL」：等待用户提供新 SQL，重新走 EXPLAIN 流程。
 > 用户选「跳过此步」：记录该步状态为 `❌ 跳过（高风险）`，继续下一步。
+> 🟡/🔴 风险必须同步创建 `pending_confirmation`；没有 pending_confirmation 记录时，视为门禁未完成，禁止执行 SQL。
 
 ---
 
