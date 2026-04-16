@@ -10,10 +10,12 @@
 |------|----------|------|
 | `.env` | 必填 | 从 `.env.example` 复制，保存本机路径和各 adapter 凭证 |
 | `CODE_ROOT` | 最小必填 | 指向本机代码仓库根目录；只做代码排查时仅此项即可 |
+| Python 环境 | 自动探测 | 优先使用 `COMPASS_PYTHON` / skill `.venv` / 当前虚拟环境 / 当前 Python / PATH |
 | SLS / Platform / MySQL / Redis / ES 凭证 | 按需填写 | 需要查对应数据源时再填；未填则该 adapter 标记不可用 |
 | `config/code-repos.yaml` | 通常自动生成 | 目录特殊或项目名不一致时才手动编辑 |
 
 > 不再从 MCP 配置中推断连接信息。Compass 的主路径是内部 adapter 读取 `.env`，再通过 adapter `health_check()` 验证。
+> Python 环境只自动探测，不静默创建 venv、不静默安装依赖；需要创建或安装时，先展示命令并等待用户确认。
 
 ## 触发条件
 
@@ -37,6 +39,7 @@ print(render_setup_report(report))
 
 - `.env` 是否存在
 - `CODE_ROOT` 是否已配置且路径存在
+- Python 环境是否可用、来自哪里、版本号是多少
 - 哪些 adapter 已配置，哪些缺变量
 - 下一步需要用户补什么
 
@@ -54,6 +57,13 @@ cp .env.example .env
 
 ```dotenv
 CODE_ROOT=/Users/<you>/workspace/projects
+```
+
+可选 Python 覆盖配置：
+
+```dotenv
+# 不填时自动探测；只有你想强制使用某个 Python 时才填写
+COMPASS_PYTHON=/Users/<you>/workspace/compass/.venv/bin/python
 ```
 
 按需数据源配置：
@@ -105,7 +115,27 @@ REDIS_FINANCE_TEST_PASSWORD=
 - Vue 前端：扫描 router → api → views
 - 输出 `projects/<name>.md`
 
-## Step 5 — Adapter 连通性验证
+## Step 5 — Python 环境与依赖验证
+
+Compass 自动探测 Python 的优先级：
+
+1. `.env` 或运行环境中的 `COMPASS_PYTHON`
+2. skill 目录下 `.venv/bin/python`
+3. 当前激活的 `VIRTUAL_ENV`
+4. 当前运行 Codex 的 Python
+5. PATH 中的 `python3` / `python`
+
+要求 Python 版本为 3.10+。
+
+如果未检测到可用 Python，输出建议：
+
+```bash
+python3 -m venv .venv
+```
+
+如果检测到 Python 但缺依赖，输出建议安装命令；安装动作必须等待用户确认后执行。若来源是 `COMPASS_PYTHON` / skill `.venv` / `VIRTUAL_ENV`，安装命令使用该 Python；若来源是当前 Python 或 PATH，优先建议创建 skill `.venv` 后再安装。
+
+## Step 6 — Adapter 连通性验证
 
 只验证已配置的 adapter。不要因为某个按需 adapter 未配置而阻断整个 Compass。
 
@@ -127,13 +157,14 @@ REDIS_FINANCE_TEST_PASSWORD=
 | Redis | 已配置 / 缺变量 | ok / error / skipped | test/uat | ___ |
 | ES | 已配置 / 缺变量 | ok / error / skipped | test | ___ |
 
-## Step 6 — 完成口径
+## Step 7 — 完成口径
 
 完成时告诉用户：
 
 - 最小配置是否已就绪
 - `.env` 位置
 - `CODE_ROOT` 当前值
+- Python 来源、版本、是否使用 `.venv`
 - 已可用 adapter
 - 未配置 adapter 对排查能力的影响
 - 后续可以直接说「使用罗盘查线上问题：...」

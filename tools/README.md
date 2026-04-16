@@ -11,6 +11,7 @@
 - `action_cards.py`：执行前、门禁、执行后的结构化卡片协议。
 - `sql_gate.py`：解析 SQL EXPLAIN 并输出结构化风险判定。
 - `evidence_graph.py`：沉淀页面、接口、方法、表、日志等证据关系。
+- `python_env.py`：自动探测可用 Python，生成 venv/依赖安装建议。
 - `setup_check.py`：安装后检查 `.env`、`CODE_ROOT` 和 adapter 凭证配置状态。
 - `tool_protocol.md`：工具调用协议（必须遵守）。
 

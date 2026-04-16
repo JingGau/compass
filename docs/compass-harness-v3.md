@@ -37,8 +37,9 @@
 
 - 用户手动准备的核心配置文件只有 `.env`。
 - 最小可用配置只有 `CODE_ROOT`；数据源凭证按 SLS / Platform / MySQL / Redis / ES 能力按需填写。
+- Python 环境自动探测，优先级为 `COMPASS_PYTHON` → skill `.venv` → `VIRTUAL_ENV` → 当前 Python → PATH；创建 venv 和安装依赖需用户确认。
 - `config/code-repos.yaml` 通常自动生成或使用默认配置，目录特殊时才手动编辑。
-- 已新增 `tools/setup_check.py`，用于检测 `.env`、`CODE_ROOT`、各 adapter 环境变量配置状态。
+- 已新增 `tools/python_env.py` 和 `tools/setup_check.py`，用于检测 Python、`.env`、`CODE_ROOT`、各 adapter 环境变量配置状态。
 - 已更新 `prompts/setup.md`，移除旧的 MCP 优先口径，改成 `.env + adapter health_check` 的安装后引导。
 
 ---
@@ -332,6 +333,7 @@ compass/
 │   ├── action_cards.py               # Action Card：执行前/门禁/执行后结构化卡片
 │   ├── sql_gate.py                   # SQL EXPLAIN 解析与风险判定
 │   ├── evidence_graph.py             # 证据图：页面/API/方法/表/日志线索关系
+│   ├── python_env.py                 # Python 环境自动探测与安装命令建议
 │   ├── setup_check.py                # 安装后配置检查：.env、CODE_ROOT、adapter 凭证
 │   └── tool_protocol.md              # 工具调用协议：AI 必须遵守的调用顺序和规则
 │
@@ -1429,8 +1431,10 @@ pip install -r tools/requirements.txt
 - [ ] 复制 `.env.example` 为 `.env`
 - [ ] 填入最小必填 `CODE_ROOT`
 - [ ] 按需填写 SLS / Platform / MySQL / Redis / ES 凭证
+- [ ] 自动探测 Python；如需固定解释器，在 `.env` 填 `COMPASS_PYTHON`
 - [ ] 运行 `tools/setup_check.inspect_setup()`，确认 `minimum_ready=true`
-- [ ] 创建 Python venv 并安装所有依赖（adapter + tools）
+- [ ] 如未检测到 skill `.venv`，展示创建命令并经用户确认后创建
+- [ ] 如缺依赖，展示安装命令并经用户确认后安装
 - [ ] 只对已配置 adapter 执行 `health_check()`；未配置 adapter 标记为 skipped
 - [ ] 验证 `tools/session_state.py` 可以正确读写 `memory/` 目录
 

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 from typing import Mapping
 
+from tools.python_env import PythonEnvironmentReport, detect_python_environment
+
 
 MINIMUM_REQUIRED = ("CODE_ROOT",)
 
@@ -41,6 +43,7 @@ class SetupReport:
     code_root: str | None
     code_root_exists: bool
     adapter_status: dict[str, AdapterSetupStatus]
+    python_environment: PythonEnvironmentReport
     next_steps: list[str]
 
 
@@ -52,6 +55,7 @@ def inspect_setup(root: str | Path, environ: Mapping[str, str] | None = None) ->
     for key, value in runtime_env.items():
         values.setdefault(key, value)
 
+    python_environment = detect_python_environment(root_path, environ=values)
     missing_minimum = [name for name in MINIMUM_REQUIRED if not _has_value(values.get(name))]
     code_root = values.get("CODE_ROOT")
     code_root_exists = bool(code_root and Path(code_root).exists())
@@ -75,6 +79,7 @@ def inspect_setup(root: str | Path, environ: Mapping[str, str] | None = None) ->
         code_root=code_root,
         code_root_exists=code_root_exists,
         adapter_status=adapter_status,
+        python_environment=python_environment,
         next_steps=_next_steps(env_path.exists(), missing_minimum, code_root, code_root_exists),
     )
 
@@ -88,6 +93,11 @@ def render_setup_report(report: SetupReport) -> str:
         lines.append(f"- CODE_ROOT：{report.code_root}（{exists}）")
     else:
         lines.append("- CODE_ROOT：未配置")
+    py = report.python_environment
+    if py.usable:
+        lines.append(f"- Python：{py.selected_python}（{py.source}, {py.version}）")
+    else:
+        lines.append(f"- Python：不可用（{py.reason}）")
 
     lines.append("")
     lines.append("### Adapter 凭证")
@@ -102,6 +112,9 @@ def render_setup_report(report: SetupReport) -> str:
         lines.append("### 下一步")
         for step in report.next_steps:
             lines.append(f"- {step}")
+        if not report.python_environment.usable:
+            lines.append(f"- 准备 Python：{report.python_environment.create_venv_command}")
+        lines.append(f"- 依赖安装命令（执行前需确认）：{report.python_environment.install_command}")
     return "\n".join(lines)
 
 
@@ -144,4 +157,3 @@ def _next_steps(
     if not steps:
         steps.append("按需补充 SLS / Platform / MySQL / Redis / ES 凭证，然后运行 adapter health_check")
     return steps
-

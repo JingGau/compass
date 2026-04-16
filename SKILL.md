@@ -147,6 +147,7 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 - 用户手动准备的核心文件只有 `.env`。
 - 最小必填只有 `CODE_ROOT`；只做代码排查时不需要数据源凭证。
+- Python 环境必须自动探测：`COMPASS_PYTHON` → skill `.venv` → `VIRTUAL_ENV` → 当前 Python → PATH 中的 `python3/python`。探测可自动执行，创建 venv 或安装依赖必须先确认。
 - SLS / Platform / MySQL / Redis / ES 凭证按需填写；缺失时只标记对应 adapter 不可用，不阻断其他轨道。
 - `config/code-repos.yaml` 通常由 setup 生成或使用仓库默认配置，项目目录特殊时才手动编辑。
 - 使用 `tools/setup_check.py` 的 `inspect_setup / render_setup_report` 输出配置检查结果。

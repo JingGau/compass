@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import tempfile
+import sys
 import unittest
 from pathlib import Path
 
@@ -61,7 +62,27 @@ class SetupCheckTest(unittest.TestCase):
             self.assertTrue(report.adapter_status["sls"].configured)
             self.assertTrue(report.adapter_status["platform"].configured)
 
+    def test_python_override_can_come_from_env_file(self) -> None:
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            code_root = root / "projects"
+            code_root.mkdir()
+            (root / ".env").write_text(
+                "\n".join(
+                    [
+                        f"CODE_ROOT={code_root}",
+                        f"COMPASS_PYTHON={sys.executable}",
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            report = inspect_setup(root, environ={})
+
+            self.assertTrue(report.python_environment.usable)
+            self.assertEqual(report.python_environment.source, "COMPASS_PYTHON")
+            self.assertEqual(report.python_environment.selected_python, sys.executable)
+
 
 if __name__ == "__main__":
     unittest.main()
-
