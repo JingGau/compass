@@ -31,6 +31,16 @@
 - 已更新 `SKILL.md`、`tools/tool_protocol.md`、`prompts/query-planning.md`、`prompts/result-analysis.md`、`guards/sql-safety.md`，要求每个动作必须按 `Before Card → Safety Gate → 执行或暂停 → After Card → EvidenceGraph` 顺序推进。
 - 已新增单测覆盖 Action Card 渲染、高风险 SQL 确认、Doris EXPLAIN 风险判定、证据图节点/边生成。
 
+## 实现状态同步（2026-04-16，安装配置）
+
+本轮收敛安装后的用户配置口径：
+
+- 用户手动准备的核心配置文件只有 `.env`。
+- 最小可用配置只有 `CODE_ROOT`；数据源凭证按 SLS / Platform / MySQL / Redis / ES 能力按需填写。
+- `config/code-repos.yaml` 通常自动生成或使用默认配置，目录特殊时才手动编辑。
+- 已新增 `tools/setup_check.py`，用于检测 `.env`、`CODE_ROOT`、各 adapter 环境变量配置状态。
+- 已更新 `prompts/setup.md`，移除旧的 MCP 优先口径，改成 `.env + adapter health_check` 的安装后引导。
+
 ---
 
 ## 目录
@@ -322,6 +332,7 @@ compass/
 │   ├── action_cards.py               # Action Card：执行前/门禁/执行后结构化卡片
 │   ├── sql_gate.py                   # SQL EXPLAIN 解析与风险判定
 │   ├── evidence_graph.py             # 证据图：页面/API/方法/表/日志线索关系
+│   ├── setup_check.py                # 安装后配置检查：.env、CODE_ROOT、adapter 凭证
 │   └── tool_protocol.md              # 工具调用协议：AI 必须遵守的调用顺序和规则
 │
 ├── adapters/                         # 能力适配层（基本沿用 v2.0）
@@ -1415,9 +1426,12 @@ pip install -r tools/requirements.txt
 
 **环境配置**：
 
-- [ ] 复制 `.env.example` 为 `.env`，填入所有 adapter 的实际凭证
+- [ ] 复制 `.env.example` 为 `.env`
+- [ ] 填入最小必填 `CODE_ROOT`
+- [ ] 按需填写 SLS / Platform / MySQL / Redis / ES 凭证
+- [ ] 运行 `tools/setup_check.inspect_setup()`，确认 `minimum_ready=true`
 - [ ] 创建 Python venv 并安装所有依赖（adapter + tools）
-- [ ] 执行各 adapter 的 `health_check()` 验证连通性
+- [ ] 只对已配置 adapter 执行 `health_check()`；未配置 adapter 标记为 skipped
 - [ ] 验证 `tools/session_state.py` 可以正确读写 `memory/` 目录
 
 **Harness 工具验证**：

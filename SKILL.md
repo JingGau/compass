@@ -139,6 +139,20 @@ description: "线上问题排查与数据洞察 Skill。通过自然语言驱动
 
 ---
 
+## 首次配置门禁
+
+在开始任何排查前，如果检测到 `.env` 不存在、`CODE_ROOT` 未配置、或 `CODE_ROOT` 路径不可用，必须先进入 `prompts/setup.md`，并禁止调用任何 adapter。
+
+配置原则：
+
+- 用户手动准备的核心文件只有 `.env`。
+- 最小必填只有 `CODE_ROOT`；只做代码排查时不需要数据源凭证。
+- SLS / Platform / MySQL / Redis / ES 凭证按需填写；缺失时只标记对应 adapter 不可用，不阻断其他轨道。
+- `config/code-repos.yaml` 通常由 setup 生成或使用仓库默认配置，项目目录特殊时才手动编辑。
+- 使用 `tools/setup_check.py` 的 `inspect_setup / render_setup_report` 输出配置检查结果。
+
+---
+
 ## 默认工具边界
 
 | 允许 | 需用户确认 | 禁止 |

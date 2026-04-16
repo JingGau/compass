@@ -8,6 +8,10 @@
 - `context_injector.py`：按步骤注入最小上下文包。
 - `sensors.py`：流程偏离、查询质量、上下文体积、日志轨完成度检测。
 - `compressor.py`：步骤级摘要压缩。
+- `action_cards.py`：执行前、门禁、执行后的结构化卡片协议。
+- `sql_gate.py`：解析 SQL EXPLAIN 并输出结构化风险判定。
+- `evidence_graph.py`：沉淀页面、接口、方法、表、日志等证据关系。
+- `setup_check.py`：安装后检查 `.env`、`CODE_ROOT` 和 adapter 凭证配置状态。
 - `tool_protocol.md`：工具调用协议（必须遵守）。
 
 ## 设计原则
