@@ -1,6 +1,6 @@
 enabled: true
 
-base_url: "http://10.20.0.2:8081"
+base_url: "${PLATFORM_BASE_URL}"
 
 auth:
   header_user: "X-User-Name"

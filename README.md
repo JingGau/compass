@@ -41,7 +41,7 @@ python3 -m compass_cli report --format markdown
 线上排查应优先使用受控会话命令，让 CLI 负责状态机和证据门禁：
 
 ```bash
-python3 -m compass_cli start "用户礼品卡不展示，手机号 15921195068，今天下午" --json
+python3 -m compass_cli start "用户礼品卡不展示，手机号 13900000000，今天下午" --json
 python3 -m compass_cli confirm --mode auto --json
 python3 -m compass_cli next --json
 python3 -m compass_cli scene fact \
@@ -56,9 +56,9 @@ python3 -m compass_cli action plan \
   --source SLS \
   --objective "确认财务是否返回礼品卡" \
   --success-criteria "拿到 payment-ways-v2 trace 中财务返回和最终响应差异" \
-  --input "query=15921195068 AND payment-ways-v2" \
+  --input "query=13900000000 AND payment-ways-v2" \
   --input "time_range=2026-04-25 16:40~17:10" \
-  --input "anchor=15921195068" \
+  --input "anchor=13900000000" \
   --gate "type=sls" \
   --gate "status=passed" \
   --gate "keyword_source=code" \
@@ -147,13 +147,13 @@ Evidence 质量字段：
 方式一：命令行指定 vault 路径。
 
 ```bash
-python3 -m compass_cli kb search "入金通知" --root "/Users/you/Obsidian/工作笔记" --json
+python3 -m compass_cli kb search "入金通知" --root "$HOME/Obsidian/工作笔记" --json
 ```
 
 方式二：通过环境变量设置默认 vault。
 
 ```bash
-export COMPASS_OBSIDIAN_ROOT="/Users/you/Obsidian/工作笔记"
+export COMPASS_OBSIDIAN_ROOT="$HOME/Obsidian/工作笔记"
 python3 -m compass_cli kb search "清分单" --json
 ```
 

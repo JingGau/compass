@@ -24,7 +24,7 @@ class ActionCardsTest(unittest.TestCase):
             tool="platform",
             environment="prod",
             target={
-                "sql": "SELECT user_id, user_account FROM t_user WHERE user_account = '13266525252'",
+                "sql": "SELECT user_id, user_account FROM t_user WHERE user_account = '13900000001'",
             },
             expected="拿到 user_type / is_channel",
         )
@@ -101,7 +101,7 @@ class ActionCardsTest(unittest.TestCase):
             purpose="确认账号查询是否打到后端",
             tool="sls",
             environment="prod",
-            target={"query": "13266525252 AND /userFinance/driverFinance/list", "limit": 50},
+            target={"query": "13900000001 AND /userFinance/driverFinance/list", "limit": 50},
             expected="命中请求日志并提取 traceId",
         )
         result = ActionResult(

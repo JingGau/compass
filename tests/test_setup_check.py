@@ -56,7 +56,7 @@ class SetupCheckTest(unittest.TestCase):
 
             report = inspect_setup(
                 root,
-                environ={"PLATFORM_USERNAME": "user", "PLATFORM_PASSWORD": "pass"},
+                environ={"PLATFORM_BASE_URL": "https://platform.example.com", "PLATFORM_USERNAME": "user", "PLATFORM_PASSWORD": "pass"},
             )
 
             self.assertTrue(report.adapter_status["sls"].configured)
