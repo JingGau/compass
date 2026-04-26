@@ -53,6 +53,8 @@ health = client.health_check()
 
 ## 可用数据库
 
+更多数据源查找顺序、JDBC Catalog fallback 和 MySQL profile 边界见 `knowledge/data-source-index.md`。
+
 | 数据库 | 内容 |
 |--------|------|
 | `ods_base_cdc` | 用户、电站、充电桩等基础信息 |

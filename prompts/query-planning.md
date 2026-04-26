@@ -1,6 +1,6 @@
 # 查询规划
 
-**职责**：根据实体、场景，制定具体的查询方案，展示给用户确认后执行。
+**职责**：根据结构化问题、实体、场景和初始假设，制定具体的查询方案，展示给用户确认后执行，并在执行中维护 Investigation State。
 
 > 本文件被 SKILL.md Step 4 引用，核心约束以 SKILL.md 为准，本文件负责具体执行细节。
 
@@ -18,6 +18,8 @@
 7. **每步必须按顺序输出三块**：Before Block → Safety Gate Block → 执行 → After Block；任何一块缺失视为未完成，禁止继续下一步
 8. **每步必须先生成 Action Card**：用 `tools/action_cards.py` 表达本次动作；禁止直接调用 adapter、直接读代码、直接查日志后再补说明
 9. **所有 After Block 必须产出线索**：traceId/接口/方法/表/key/时间戳至少逐项说明「发现」或「未发现，已尝试什么」
+10. **规划必须围绕假设和证据**：每一步查询都要声明验证哪个假设、预期得到什么证据
+11. **每步 After 必须更新状态**：新增证据、支持/排除假设、调整下一步；无状态变化不得继续原方向硬查
 
 ---
 
@@ -96,6 +98,34 @@
 
 > **「提取线索」是核心字段，不允许整行留空或写「无」。** 若某项真的未发现，必须写「未发现，已尝试：___」并说明原因。线索会被带入下一轨，是三轨不跑偏的唯一保障。
 > After Block 必须列出「可继续下钻」候选：可查代码、可查 SQL、可拉链路、可查日志、可查缓存中至少选出适用项。
+
+### State Update Block（执行后状态更新，强制）
+
+After Block 后必须紧跟简短状态更新：
+
+```yaml
+🧭 Investigation State Update:
+  new_evidence:
+    - id: E{N}
+      source: SQL/SLS/代码/Redis/ES
+      summary: ___
+      supports: H1/H2/事实/排除项
+  hypotheses:
+    - id: H1
+      status: 待验证/支持/排除
+      reason: ___
+  ruled_out:
+    - ___
+  next_action:
+    purpose: ___
+    track: 代码/日志/数据
+    success_criteria: ___
+```
+
+规则：
+- 没有新增证据时，`new_evidence` 写空数组，并说明为何本步无效。
+- 同方向连续 2 次无新增证据，必须换轨道或暂停补信息。
+- 不允许把 `hypotheses.status=支持` 的内容直接当最终结论；最终结论只能在 Step 7 证据链分析中输出。
 
 ---
 

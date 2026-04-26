@@ -1,0 +1,5 @@
+interface:
+  display_name: "Compass Harness"
+  short_description: "线上问题排查、证据链治理与根因分析 harness"
+  default_prompt: "Use $compass-harness to investigate this线上问题 with evidence-chain discipline."
+  brand_color: "#2563EB"

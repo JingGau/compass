@@ -58,7 +58,7 @@ class PythonEnvTest(unittest.TestCase):
             self.assertTrue(report.usable)
             self.assertEqual(report.selected_python, sys.executable)
             self.assertEqual(report.source, "current")
-            self.assertIn("python -m venv .venv", report.create_venv_command)
+            self.assertIn(f"{sys.executable} -m venv .venv", report.create_venv_command)
             self.assertIn(".venv/bin/python -m pip install", report.install_command)
 
 

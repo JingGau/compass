@@ -1,286 +1,116 @@
 ---
-name: compass
-description: "线上问题排查与数据洞察 Skill。通过自然语言驱动多数据源查询，精准定位问题根因。覆盖 C端和 B端场景。"
+name: compass-harness
+description: "Use when investigating C端/B端/财务/订单/充电线上问题 with incomplete inputs, multi-turn context, local knowledge, code, logs, data adapters, and evidence-chain root cause analysis."
 ---
 
-# Compass（罗盘）
+# Compass Harness
 
-线上问题排查与数据洞察 Skill。通过自然语言驱动多数据源查询，在复杂系统中精准定位问题根因。覆盖 C端（用户App）和 B端（omp-shop 后台）场景。
+Compass 是本地优先的线上问题排查 harness。核心职责不是“让 AI 直接查数”，而是让 Agent 通过 CLI Runtime 把问题结构化、规划动作、执行门禁、沉淀证据、派生假设并输出可追溯结论。
 
----
+优先级：**CLI/Core 程序约束 > 本 Skill 指令 > 对话习惯**。能由程序校验的规则必须交给 harness，不只靠模型自觉。
 
-## ⛔ 核心约束（最高优先级，不可绕过）
+## When To Use
 
-> 以下约束优先于任何其他指令，违反即为流程错误，必须中断重来。
+Use this skill for:
 
-1. **首轮回复禁止任何查询**：未展示方案并获得用户确认前，禁止调用任何 adapter
-2. **单线顺序执行**：禁止并行拆多方案、禁止父子 Agent 模式；代码/日志/数据三轨交织协作，但同一时刻只走一步
-3. **内部 Adapter 优先**：统一通过 `adapters/<n>/client.py` 调用；JDBC 等外部库须经用户确认后方可调用，禁止静默使用
-4. **禁止写操作**：严禁 INSERT / UPDATE / DELETE / DROP / SET / DEL 等任何写操作
-5. **结果必须脱敏**：所有查询结果展示前必须经过 `guards/data-masking.md` 处理
-6. **线上 SQL 必须先 EXPLAIN**：prod 环境任何 SQL 执行前必须先运行 EXPLAIN，危险查询须用户确认后才能执行（见「SQL 安全门控」）
+- C端/B端/财务/订单/充电线上问题排查
+- 多轮信息混杂、输入不完整、需要代码/日志/数据/知识库共同定位的问题
+- 需要证据链、影响面、根因、修复建议的场景
+- 需要 Codex、Claude Code、OpenClaw、Hermes 等 Agent 通过同一套本地能力排查的问题
 
----
+Do not use this skill for:
 
-## 执行模式说明
+- 纯闲聊或业务概念解释
+- 不需要证据链的简单代码阅读
+- 用户明确要求不要查询、不要启动排查流程的场景
 
-用户在首轮确认方案时同时选择执行模式：
+## Mandatory Workflow
 
-| 模式 | 编号 | 行为 |
-|------|------|------|
-| 自动模式（默认） | 0 | 方案确认后全自动跑完，输出过程日志，无需中间确认 |
-| 历史策略 N | 1/2/3 | 同自动模式，按匹配策略全自动执行 |
-| **手动模式** | M | 每步执行前停下来，让用户确认「用哪个工具/走哪条轨道」，确认后执行该步，再停下来确认下一步 |
+1. 默认使用线上环境 `prod` 排查；只有用户明确指定 test/uat/测试/预发时才切换环境。
+2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。
+3. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程。
+4. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence。
+5. 新假设必须引用 scene fact 或 evidence。
+6. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节。
+7. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
+8. 最终报告必须优先由 `report --audience technical|business|review` 生成。
 
-> 回复数字选择模式，不回复默认走 0 号自动模式；回复 `M` 进入手动模式。
+最小命令链：
 
-**手动模式下每步格式：**
-
-```
-⏸ 下一步（Step N）
-- 目的：___
-- 建议工具/轨道：___（原因：___）
-- 备选：___
-
-**[确认]** **[换工具：___]** **[换轨道：___]** **[停止]**
-```
-
-> 用户确认后执行该步并输出结果，然后自动呈现下一步，继续等待确认。
-
----
-
-## 首轮回复强制模板
-
-> 用户描述完问题后，第一条回复**必须且只能**输出以下格式，不得有任何偏差。
-
-```
-## 📋 问题复述
-（一句话复述用户问题）
-
-## 🔍 识别实体
-（列出已识别实体；缺失的标注「❓待补充」并追问）
-
-## 🗂 场景判断
-- 场景：C端 / B端 / 暂不确定
-- 类别：（对应 memory/categories.yaml）
-
-## 🌐 环境与工具
-- 使用环境：prod / test / uat
-- 可用 Adapter：（列出该环境下可用的 adapter，标注内部/外部）
-
-## 📊 排查方案
-（读取 memory/strategies.yaml 匹配后填写）
-
-| # | 方案名 | 入轨方式 | 核心思路 | 预计耗时 |
-|---|--------|---------|----------|----------|
-| 0 | 自动模式（默认） | 三轨协作，动态入轨 | 证据驱动，代码/日志/数据交织推进，全自动完成 | - |
-| 1 | （历史策略1） | ... | ... | ... |
-| 2 | （历史策略2） | ... | ... | ... |
-| 3 | （历史策略3） | ... | ... | ... |
-| M | 手动模式 | 三轨协作 | 每步由用户确认工具/轨道后执行 | 按用户节奏 |
-
-## ✋ 请确认方案
-回复数字选择（0/1/2/3），或回复 M 进入手动模式。不回复默认走 0 号。说「停」或「等等」立即中断。
+```bash
+python3 -m compass_cli start "<用户原始问题>"
+python3 -m compass_cli confirm --mode auto
+python3 -m compass_cli next
+python3 -m compass_cli scene fact --category entrypoint --name "<入口名>" --value "<接口/页面/动作>" --source "<证据来源>"
+python3 -m compass_cli action plan --action-id A1 --track sls --source SLS \
+  --objective "<本次动作要验证什么>" \
+  --success-criteria "<什么结果算验证成功>" \
+  --input "query=<查询条件>" \
+  --input "anchor=<订单号/手机号/userId/traceId/站点名等高区分度实体>" \
+  --input "time_range=<查询时间窗>" \
+  --gate "type=sls" \
+  --gate "status=passed" \
+  --gate "keyword_source=none|code|sql|schema|table_field|code_sql"
+python3 -m compass_cli action complete --action-id A1 \
+  --summary "<证据摘要>" \
+  --finding "<关键发现>" \
+  --supports H1
+python3 -m compass_cli conclude --conclusion "<结论>" --evidence E1 --confidence high \
+  --what "<发生了什么>" \
+  --where "<服务/接口/类方法/链路位置>" \
+  --when "<具体时间或时间窗>" \
+  --why-technical "<技术根因>" \
+  --why-business "<业务触发条件>" \
+  --blast-radius "<量化影响范围>" \
+  --how "<传播链路>" \
+  --inference-chain "<连续因果推断链>"
+python3 -m compass_cli report --audience technical
+python3 -m compass_cli report --audience review
 ```
 
-✅ **首轮输出完成，等待用户确认后继续。**
+## Hard Rules
 
----
+- 未 `confirm` 前禁止记录查询动作。
+- 排查环境默认是 `prod`；Agent 不得因为安全或方便自行改用 test/uat。
+- 罗盘只用于问题查询、定位和证据链分析；不得修改业务代码、生成补丁、提交代码或执行修复。
+- 禁止任何写操作：`INSERT / UPDATE / DELETE / DROP / SET / DEL` 等。
+- 内部 adapter 优先；JDBC、直连数据库、未登记 HTTP 接口等外部方式必须先让用户确认。
+- 目标表或库在内部 CDC/Doris 常规库找不到时，必须先按 `knowledge/data-source-index.md` 查代码表名、Doris Internal Catalog、Doris JDBC Catalog、MySQL profile，不得猜库名或表名。
+- prod SQL 必须先 EXPLAIN，风险规则见 `guards/sql-safety.md`。
+- SLS 查询必须有高区分度实体锚点：订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等；禁止用“异常/失败/余额不足/支付/订单”等泛关键词作为主查询。
+- SLS 查询如果在实体锚点之外追加关键词，关键词必须来自代码常量/日志模板或 SQL 表字段/表结构，并通过 `keyword_source` 声明；不得由 Agent 自己猜。
+- 所有展示给用户的查询结果必须脱敏，规则见 `guards/data-masking.md`。
+- `action plan` 必须满足 track 级必填字段；缺字段时不能自行绕过。
+- Agent 使用罗盘排查时必须完整遵循 CLI Runtime 流程；禁止直接查询后再补状态，禁止绕过失败的 CLI 门禁。
+- evidence 应尽量填写 `kind / strength / raw-ref`，让证据质量进入报告。
+- 进入 `concluded` 后禁止继续追加 action/evidence；要补证据必须使用 `reopen --reason ...` 或重开 session。
 
-## SQL 安全门控（prod 环境专属）
+Track 门禁：
 
-> 完整规则、风险三档定义、交互格式、内联标注规范统一见 `guards/sql-safety.md`，本文件不重复定义。
+| track | 必填 input | 必填 gate |
+|-------|------------|-----------|
+| sls | `query`, `time_range`, `anchor` | `type`, `status`, `keyword_source` |
+| sql | `sql`, `env` | `type`, `explain`, `risk` |
+| code | `repo`, `target` | `type`, `scope` |
+| kb | `query` | `type` |
+| manual | 无 | 无 |
 
-**核心约束摘要（细节以 `guards/sql-safety.md` 为准）：**
+## Progressive References
 
-| 要点 | 说明 |
-|------|------|
-| 适用范围 | prod 环境所有 Doris/MySQL SQL，强制执行；test/uat 跳过 |
-| 风险三档 | 🟢 低风险自动执行 / 🟡 中风险等待确认 / 🔴 高风险必须明确确认 |
-| 判定维度 | rows 行数 + type 是否全表扫描 + key 是否命中索引 + AI 综合判断 |
-| 分区表 | 缺少 `dt_month` 时自动补充，不打断用户 |
-| 用户改写 | 用户选「我来改写 SQL」后重新走 EXPLAIN 流程 |
+Read only the reference needed for the current task:
 
----
+- `references/intake-and-state.md`：首轮模板、最小定位实体、状态结构、证据链格式。
+- `references/runtime-protocol.md`：CLI Runtime、action 生命周期、Action Card、每轮最小调用顺序。
+- `references/safety-and-capabilities.md`：SQL/Redis/ES/脱敏门禁、adapter 能力、项目和策略系统。
+- `knowledge/data-source-index.md`：Doris/CDC/JDBC Catalog/MySQL profile 的查找顺序和表找不到时的 fallback。
 
-## 工具优先级与外部库规则
+For detailed SQL/Redis/ES/data masking rules, read the corresponding files under `guards/` only when that track is used.
 
-**优先级顺序（从高到低）：**
+## Completion Standard
 
-1. 内部 Adapter（`adapters/<n>/client.py`）—— 直接使用
-2. Platform Adapter（Doris，JDBC 访问）—— 需用户确认
-3. 其他外部库 / 直连方式 —— 需用户确认
+一次排查只有在以下条件满足时才算完成：
 
-**外部库确认格式：**
-
-```
-⚠️ 当前步骤需要使用外部库：[库名/连接方式]
-原因：内部 adapter 不覆盖该数据源（[说明原因]）
-连接信息：[catalog/profile 名]
-
-**[确认使用]** **[换内部方案]** **[跳过此步]**
-```
-
-> 用户选「换内部方案」时，AI 必须尝试用内部 adapter 改写；确实无法覆盖时再提示外部库。
-
----
-
-## 安全门控（执行查询前必检）
-
-| 查询类型 | 必读文件 |
-|---------|---------|
-| SQL（prod） | `guards/sql-safety.md`（权威，含三档交互格式） |
-| SQL（test/uat） | `guards/sql-safety.md` |
-| Redis | `guards/redis-safety.md` |
-| ES | `guards/es-safety.md` |
-| 所有结果展示 | `guards/data-masking.md` |
-| 上下文占用 | `guards/context-limits.yaml` |
-| 临时文件 | `guards/temp-files.yaml` |
-
----
-
-## 首次配置门禁
-
-在开始任何排查前，如果检测到 `.env` 不存在、`CODE_ROOT` 未配置、或 `CODE_ROOT` 路径不可用，必须先进入 `prompts/setup.md`，并禁止调用任何 adapter。
-
-配置原则：
-
-- 用户手动准备的核心文件只有 `.env`。
-- 最小必填只有 `CODE_ROOT`；只做代码排查时不需要数据源凭证。
-- Python 环境必须自动探测：`COMPASS_PYTHON` → skill `.venv` → `VIRTUAL_ENV` → 当前 Python → PATH 中的 `python3/python`。探测可自动执行，创建 venv 或安装依赖必须先确认。
-- SLS / Platform / MySQL / Redis / ES 凭证按需填写；缺失时只标记对应 adapter 不可用，不阻断其他轨道。
-- `config/code-repos.yaml` 通常由 setup 生成或使用仓库默认配置，项目目录特殊时才手动编辑。
-- 使用 `tools/setup_check.py` 的 `inspect_setup / render_setup_report` 输出配置检查结果。
-
----
-
-## 默认工具边界
-
-| 允许 | 需用户确认 | 禁止 |
-|------|-----------|------|
-| 读/写本 Skill 目录内文件 | JDBC 等外部库调用 | `curl` 未登记的业务 HTTP 接口 |
-| 通过 `adapters/<n>/client.py` 执行查询 | Platform adapter（Doris JDBC） | 本机 `mysql` / `redis-cli` 直连 |
-| | | 工作区其他未登记 MCP |
-
----
-
-## Harness 工具调用协议（v3 主线）
-
-> 从 v3 开始，流程控制以 `tools/` 工具返回信号为准，Prompt 仅负责步骤内推理与展示格式。
-
-### 必须调用的工具
-
-- `tools/session_state.py`：`read_state / write_state / mark_checkpoint / assert_step_complete / advance_step`
-- `tools/context_injector.py`：`get_context`（按步骤注入）
-- `tools/sensors.py`：`sense_flow_deviation / sense_query_result / sense_context_size / sense_log_track_progress`
-- `tools/compressor.py`：`compress`（体积超阈值时强制调用）
-- `tools/action_cards.py`：`InvestigationAction / render_before_card / render_safety_gate_card / render_after_card / build_pending_confirmation`
-- `tools/sql_gate.py`：`assess_sql_explain`（prod SQL EXPLAIN 风险判定）
-- `tools/evidence_graph.py`：`EvidenceGraph`（沉淀页面、接口、方法、表、日志线索）
-
-### Action Card 协议（强制）
-
-任何查询、日志搜索、代码读取、Redis/ES 访问都必须先构造 `InvestigationAction`，再按统一协议执行。**禁止直接调用 adapter 或直接读代码后再补过程说明**。
-
-每个动作的强制顺序：
-
-1. 构造 `InvestigationAction`，写明目的、工具、环境、查询对象、成功标准。
-2. 输出 `render_before_card(action)`，让用户看到即将执行的内容。
-3. 输出对应 Safety Gate；SQL 使用 `assess_sql_explain` 后再 `render_safety_gate_card`。
-4. 若 `gate.requires_confirmation=true`，必须 `build_pending_confirmation` 并暂停；用户明确回复「确认执行」前禁止执行。
-5. 执行查询 / 读代码 / 拉日志。
-6. 构造 `ActionResult`，输出 `render_after_card(action, result)`。
-7. 将 `ActionResult.leads` 写入 `EvidenceGraph`，作为下一步候选来源。
-
-| 轨道 | 执行前必须展示 | 执行后必须提取 |
-|------|----------------|----------------|
-| SLS | query、时间范围、limit、容器/服务 | traceId/tlogId、接口、服务、异常时间、可继续查的代码/DB/链路 |
-| SQL | 完整 SQL、环境、EXPLAIN SQL 和风险 | 返回行数、关键字段、相关表、是否指向代码/日志 |
-| 代码 | 应用、文件/类/方法、来源线索 | 页面→接口→Controller→Service→Mapper→表、日志关键字、业务分支 |
-| Redis/ES | 命令/索引/查询体、范围限制 | key/index、命中摘要、是否指向 SQL/代码/日志 |
-
-### 每轮最小调用顺序
-
-1. `read_state`
-2. `sense_flow_deviation`
-3. `get_context`
-4. （每个动作前）`InvestigationAction -> render_before_card -> Safety Gate`
-5. （风险需确认时）`build_pending_confirmation -> write_state -> 暂停`
-6. （执行后）`ActionResult -> render_after_card -> EvidenceGraph.add_result_leads`
-7. （查询后）`sense_query_result + mark_checkpoint`
-8. （推进前）`assert_step_complete`
-9. （必要时）`sense_context_size -> compress`
-10. `advance_step`
-11. `write_state`
-
-### 强制门禁
-
-- `assert_step_complete.ok=false`：禁止推进，必须补完缺失项。
-- `sense_log_track_progress.complete=false`：禁止进入 Step 7。
-- `sense_context_size.action in {COMPRESS, EMERGENCY_COMPRESS}`：必须先压缩再继续。
-
----
-
-## 能力注册表
-
-### Adapters
-
-| Adapter | 用途 | 环境覆盖 | 类型 | 状态 |
-|---------|------|---------|------|------|
-| platform | Doris 分析数据查询 | 仅 prod | 外部（JDBC） | ✅ |
-| sls | SLS 日志查询 | prod / test / uat | 内部 | ✅ |
-| mysql | MySQL/PolarDB 数据库查询 | test / uat | 内部 | ✅ |
-| redis | Redis 缓存状态查询 | test / uat | 内部 | ✅ |
-| elasticsearch | ES 全文检索 | test（仅 test-finance） | 内部 | ✅ |
-
-> 凭证通过环境变量注入（`${VAR}` 语法），`adapters/base.py` 自动读取 `.env`。
-
-### Projects
-
-`projects/` 下每个 `.md` 是已注册项目的代码导航地图，路径基于 `config/code-repos.yaml`，用户在 `.env` 设置 `CODE_ROOT`。
-
-### 策略系统
-
-`memory/strategies.yaml` 存储所有排查经验，多维度评分自动匹配最佳方案。
-
----
-
-## 排查流程
-
-> 总览表：8步顺序执行，不可跳步，不可并行。交互细节见各引用文件。
-
-| Step | 名称 | 触发条件 | 执行逻辑摘要 | 完成标志 | 引用 |
-|------|------|---------|------------|---------|------|
-| 1 | 实体提取 | 用户描述完问题，首轮回复中执行 | 识别 user_id / org_id / 订单号 / 服务名 / 时间范围等；缺失项标注 ❓ 并追问；只识别不推断 | 实体表格输出，追问已发出 | `prompts/entity-extraction.md` |
-| 2 | 场景分类 | Step 1 完成后，同在首轮回复中 | 判断 C端/B端；匹配 categories.yaml 类别；类别匹配度影响策略评分 | 场景 + 类别已输出 | `prompts/classify-scene.md` |
-| 3 | 代码理解 | 有 projects/ 注册项目时执行；否则跳过 | 读 `projects/<服务名>.md`；提取核心类、日志关键字、表名、Redis key 模式；结果带入 Step 4 | 代码导航完成或跳过声明已输出 | `prompts/query-planning.md` Step 0 |
-| 4 | 查询规划 | Step 3 完成后，首轮回复末尾 | 环境探查 → 策略匹配（Top 3 + 0/M）→ 入轨声明（🔵🟡🟢）→ 步骤表格展示 → **等待用户确认模式和入轨** | 用户回复确认编号或 M | `prompts/query-planning.md` |
-| 5 | 安全门控 | 每次调用 adapter 前逐次触发 | prod SQL **强卡** EXPLAIN 三档（🟢自动/🟡等确认/🔴必须明确确认）；外部库强卡确认；结果展示前脱敏 | 门控通过或用户确认 | `guards/sql-safety.md` 等 |
-| 6 | 执行查询 | Step 5 通过后立即执行 | 按所选模式推进：自动模式全跑输出进度表；手动模式每步停下确认工具/轨道；**日志轨强制走四步：关键字查日志 → 提取链路ID（traceId/tlogId）→ 拉全链路 → 触发代码轨**；空结果最多重试 3 次后强制暂停 | 三轨收敛或路径耗尽 | `adapters/<n>/client.py` + `prompts/query-planning.md` |
-| 7 | 结果分析 | Step 6 收敛后自动进入 | 输出结论卡片 → 排查过程卡片（技术用户）→ 查询结果明细 → 建议操作；业务用户跳过过程卡片 | 结论卡片 + 操作选项已输出 | `prompts/result-analysis.md` |
-| 8 | 策略归档 | **Step 7 结论卡片输出完毕后自动触发，不等用户说结束** | 向用户收集反馈评分 → 将本次排查路径、有效关键字、根因标签写入 strategies.yaml → 更新匹配度评分；**不可跳过** | 反馈收集完毕，归档简报已输出 | `prompts/strategy-improvement.md` |
-
----
-
-## 特殊入口
-
-| 用户说 | 执行 |
-|--------|------|
-| "配置" / "setup" / "初始化" | `prompts/setup.md` |
-| "注册项目" | `prompts/project-onboarding.md` |
-| "扫描前端整理知识" | `prompts/knowledge-batch-scan.md` |
-| "注册页面" | `prompts/knowledge-onboarding.md` |
-| "加个 XX 能力" | `adapters/_convention.md` |
-| "知识库现状" | 汇总 projects/ + adapter 状态 + 策略数量 |
-| "看更多" / "下钻" | 从临时文件加载下一批结果 |
-
----
-
-## 对话开头快捷提示（每次新对话粘贴）
-
-> 请严格按照 compass skill 流程执行：
-> 第一条回复必须包含「问题复述、识别实体、场景判断、环境与工具、排查方案、确认」六个部分，并提示用户选择执行模式（0=自动 / M=手动）；
-> 执行时采用三轨协作法（代码/日志/数据交织推进），开始前必须声明入轨方式；
-> 自动模式下方案确认后全自动跑完，输出过程，无需中间确认；
-> 手动模式下每步停下来让用户确认工具/轨道后再执行；
-> prod 环境 SQL 必须先 EXPLAIN，低风险自动执行，中风险等待确认，高风险必须明确确认（细节见 `guards/sql-safety.md`）；内部 adapter 优先，JDBC 等外部库须用户确认。
+- state 中存在 scene facts、evidence 和结构化 conclusion。
+- conclusion 引用的 evidence id 真实存在。
+- report 已生成并按用户对象选择 technical、business 或 review 视角。
+- 输出中明确区分“已证实结论”和“待验证假设”。
