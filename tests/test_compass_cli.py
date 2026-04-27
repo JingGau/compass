@@ -366,6 +366,196 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert strategy["meta"]["source_summary"] == "礼品卡在 guan-zhong payment-ways-v2 链路被过滤"
     assert strategy["meta"]["note"] == "App 支付方式过滤类问题可复用"
 
+    duplicate_keep = run_cli(
+        "strategy",
+        "keep",
+        "--state-file",
+        str(state_file),
+        "--memory-file",
+        str(memory_file),
+        "--json",
+    )
+    assert duplicate_keep.returncode == 1
+    assert "策略沉淀已确认" in json.loads(duplicate_keep.stdout)["error"]
+
+
+def test_strategy_memory_preserves_planned_action_query_path(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    memory_file = tmp_path / "strategies.yaml"
+    run_cli("start", "支付单 2604251117229860 预付款停充，今天 11:17", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "charge_start",
+        "--value",
+        "预付款启动充电",
+        "--source",
+        "用户问题",
+    )
+    run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "sls",
+        "--source",
+        "charge-server",
+        "--objective",
+        "确认下发电桩余额时使用的是余额账户还是预付款账户",
+        "--success-criteria",
+        "日志包含支付单号并能看到下发余额字段来源",
+        "--input",
+        "query=2604251117229860",
+        "--input",
+        "anchor=2604251117229860",
+        "--input",
+        "time_range=2026-04-25 11:00~12:00",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=none",
+    )
+    run_cli(
+        "action",
+        "complete",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--summary",
+        "日志显示下发电桩余额取自 balanceAmount=10",
+        "--finding",
+        "balanceAmount=10",
+    )
+    concluded = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "预付款启动后下发电桩余额错误使用余额账户金额",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "high",
+        "--what",
+        "预付款启动充电后电桩收到的可用金额为余额账户 10 元",
+        "--where",
+        "charge-server /start-charge balanceAmount",
+        "--when",
+        "2026-04-25 11:17 前后",
+        "--why-technical",
+        "启动链路组装电桩余额时读取余额账户字段，未区分预付款支付方式",
+        "--why-business",
+        "用户预付 20 元启动后又充值余额 10 元",
+        "--blast-radius",
+        "已知影响单充电单 2604251117229860，批量影响待同类支付方式确认",
+        "--how",
+        "用户预付款启动 → 余额充值 10 元 → 启动链路取余额账户金额 → 下发电桩 10 元 → 电桩余额不足停充",
+        "--inference-chain",
+        "用户描述预付 20 元和余额充值 10 元 → SLS 显示下发 balanceAmount=10 → 定位为启动链路余额来源错误",
+    )
+    assert concluded.returncode == 0, concluded.stderr
+    kept = run_cli(
+        "strategy",
+        "keep",
+        "--state-file",
+        str(state_file),
+        "--memory-file",
+        str(memory_file),
+        "--json",
+    )
+    assert kept.returncode == 0, kept.stderr
+
+    import yaml
+
+    strategy = yaml.safe_load(memory_file.read_text(encoding="utf-8"))["strategies"][0]
+    assert strategy["plan"][0]["action"] == "确认下发电桩余额时使用的是余额账户还是预付款账户"
+    assert strategy["plan"][0]["template"] == "2604251117229860"
+    assert strategy["plan"][0]["success_criteria"] == "日志包含支付单号并能看到下发余额字段来源"
+
+
+def test_strategy_keep_rejects_invalid_strategy_memory_shape(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    memory_file = tmp_path / "strategies.yaml"
+    memory_file.write_text("strategies: {}\n", encoding="utf-8")
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "app_payment_ways",
+        "--value",
+        "/app/gun/payment-ways-v2",
+        "--source",
+        "用户问题",
+    )
+    run_cli(
+        "action",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--source",
+        "SLS",
+        "--summary",
+        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+    )
+    run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "礼品卡在 guan-zhong payment-ways-v2 链路被过滤",
+        "--evidence",
+        "E1",
+        "--what",
+        "用户切换支付方式后礼品卡不展示",
+        "--where",
+        "guan-zhong /app/gun/payment-ways-v2",
+        "--when",
+        "2026-04-25 16:51 前后",
+        "--why-technical",
+        "payment-ways-v2 链路未填充 tradeModes",
+        "--why-business",
+        "用户在国网互联站 App 端切换支付方式",
+        "--blast-radius",
+        "已知影响该用户在该站 App 切换支付方式场景",
+        "--how",
+        "App 切换支付方式 → guan-zhong 过滤礼品卡",
+        "--inference-chain",
+        "财务返回礼品卡 → guan-zhong 最终响应无礼品卡 → 代码过滤点命中",
+    )
+
+    kept = run_cli(
+        "strategy",
+        "keep",
+        "--state-file",
+        str(state_file),
+        "--memory-file",
+        str(memory_file),
+        "--json",
+    )
+
+    assert kept.returncode == 1
+    assert "strategies 字段必须是列表" in json.loads(kept.stdout)["error"]
+
 
 def test_report_renders_structured_technical_and_business_views(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
@@ -1973,8 +2163,10 @@ def test_reopen_supersedes_conclusion_and_allows_new_evidence(tmp_path: Path) ->
     assert state["flow"]["phase"] == "evidence_collecting"
     assert state["revision"] == 2
     assert "conclusion" not in state
+    assert "strategy_review" not in state
     assert state["conclusion_history"][0]["status"] == "superseded"
     assert state["conclusion_history"][0]["reopen_reason"] == "用户补充微信小程序可用，需要修订 App 端影响范围"
+    assert state["conclusion_history"][0]["strategy_review"]["status"] == "pending"
 
     added = run_cli(
         "evidence",

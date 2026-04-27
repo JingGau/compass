@@ -332,6 +332,8 @@ def complete_action(
             action_id=action_id,
             track=str(action.get("track", "manual")),
             source=str(action.get("source", "unknown")),
+            objective=str(action.get("objective", "")),
+            success_criteria=str(action.get("success_criteria", "")),
             action_input=action.get("input") or {},
             gate=action.get("gate") or {},
             summary=summary,
@@ -416,8 +418,11 @@ def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
     archived["superseded_at"] = now_iso()
     archived["reopen_reason"] = reason
     archived["revision"] = state.get("revision", 1)
+    if state.get("strategy_review"):
+        archived["strategy_review"] = state.get("strategy_review")
     state.setdefault("conclusion_history", []).append(archived)
     state.pop("conclusion", None)
+    state.pop("strategy_review", None)
     state["revision"] = int(state.get("revision", 1)) + 1
     state["flow"].update(
         {
@@ -557,6 +562,8 @@ def decide_strategy_review(
         raise CompassRuntimeError("当前会话没有待确认的策略沉淀项。请先通过 conclude 输出结论。")
     if review.get("status") not in {"pending", "kept", "discarded"}:
         raise CompassRuntimeError(f"未知策略沉淀状态：{review.get('status')}。")
+    if review.get("status") != "pending":
+        raise CompassRuntimeError(f"策略沉淀已确认：{review.get('status')}。如需重新沉淀，请 reopen 后输出新结论。")
 
     decision = {
         "status": "kept" if keep else "discarded",
@@ -588,7 +595,9 @@ def _build_strategy_review(
             "action_id": item.get("action_id"),
             "track": item.get("track"),
             "source": item.get("source"),
-            "objective": (item.get("input") or {}).get("query") or (item.get("output") or {}).get("summary", ""),
+            "objective": item.get("objective") or (item.get("input") or {}).get("query") or (item.get("output") or {}).get("summary", ""),
+            "success_criteria": item.get("success_criteria", ""),
+            "input": item.get("input") or {},
             "gate": item.get("gate") or {},
         }
         for item in action_history
@@ -646,6 +655,8 @@ def _append_strategy_memory(path: str | Path, review: dict[str, Any]) -> None:
     memory_path.parent.mkdir(parents=True, exist_ok=True)
     payload = _read_strategy_memory(memory_path)
     strategies = payload.setdefault("strategies", [])
+    if not isinstance(strategies, list):
+        raise CompassRuntimeError(f"策略库 strategies 字段必须是列表：{memory_path}")
     candidate = review.get("candidate") or {}
     strategy = _build_strategy_memory_entry(candidate, review, sequence=len(strategies) + 1)
     strategies.append(strategy)
@@ -692,18 +703,28 @@ def _strategy_plan(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
     plan: list[dict[str, Any]] = []
     for index, action in enumerate(actions, start=1):
         gate = action.get("gate") or {}
+        action_input = action.get("input") or {}
         objective = str(action.get("objective") or "").strip()
         plan.append(
             {
                 "step": index,
                 "adapter": str(action.get("track") or action.get("source") or "manual"),
                 "action": objective or "按本次证据链继续查询",
-                "template": objective,
-                "env_profile": gate.get("env") or gate.get("environment") or "prod",
+                "template": _strategy_action_template(action_input, objective),
+                "env_profile": action_input.get("env") or gate.get("env") or gate.get("environment") or "prod",
                 "source": str(action.get("source") or ""),
+                "success_criteria": str(action.get("success_criteria") or ""),
             }
         )
     return plan
+
+
+def _strategy_action_template(action_input: dict[str, Any], fallback: str) -> str:
+    for key in ("query", "sql", "target"):
+        value = str(action_input.get(key) or "").strip()
+        if value:
+            return value
+    return fallback
 
 
 def _strategy_keywords(candidate: dict[str, Any]) -> list[str]:
@@ -940,6 +961,8 @@ def _build_action_history_item(
     source: str,
     action_input: dict[str, str],
     gate: dict[str, str],
+    objective: str = "",
+    success_criteria: str = "",
     summary: str,
     findings: list[str],
     leads: dict[str, list[str]],
@@ -950,6 +973,8 @@ def _build_action_history_item(
         "action_id": action_id,
         "track": track,
         "source": source,
+        "objective": objective,
+        "success_criteria": success_criteria,
         "input": action_input,
         "gate": gate,
         "output": {
