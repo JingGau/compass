@@ -8,7 +8,7 @@
 
 ```
 AI: 要扫描哪个前端项目？
-    默认：omp-shop（路径：${CODE_ROOT}/omp/omp-shop）
+    默认：omp-shop（路径：/Users/dongmaowei/workspace/projects/omp/omp-shop）
 
     扫描完前端后，是否也扫描关联的后端服务？
     A. 只扫前端（生成 omp-shop.md + 后端服务清单）

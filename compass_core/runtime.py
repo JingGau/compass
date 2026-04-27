@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
 import re
 from typing import Any
@@ -171,6 +172,14 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "next_actions": ["action record", "hypothesis add", "conclude"],
         }
     if phase == "concluded":
+        review = state.get("strategy_review") or {}
+        if review.get("status") == "pending":
+            return {
+                "phase": phase,
+                "blocked": False,
+                "message": "排查已输出结论。请先生成报告，并确认是否保留本次最终查询策略。",
+                "next_actions": ["report", "strategy keep", "strategy discard"],
+            }
         return {
             "phase": phase,
             "blocked": False,
@@ -520,16 +529,120 @@ def conclude_session(
         "details": clean_details,
         "next_actions": next_actions or [],
     }
+    state["strategy_review"] = _build_strategy_review(state, conclusion, evidence_ids, clean_details)
     state["flow"].update(
         {
             "phase": "concluded",
             "current_step": "conclusion",
-            "allowed_commands": ["report", "state show"],
+            "allowed_commands": ["report", "strategy keep", "strategy discard", "state show"],
         }
     )
     _touch(state)
     write_state(path, state)
     return state
+
+
+def decide_strategy_review(
+    path: str | Path,
+    *,
+    keep: bool,
+    note: str = "",
+    title: str | None = None,
+    memory_path: str | Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = _load_state(path)
+    _require_phase(state, {"concluded"}, "确认策略沉淀")
+    review = state.get("strategy_review") or {}
+    if not review:
+        raise CompassRuntimeError("当前会话没有待确认的策略沉淀项。请先通过 conclude 输出结论。")
+    if review.get("status") not in {"pending", "kept", "discarded"}:
+        raise CompassRuntimeError(f"未知策略沉淀状态：{review.get('status')}。")
+
+    decision = {
+        "status": "kept" if keep else "discarded",
+        "decided_at": now_iso(),
+        "note": note,
+    }
+    if title:
+        review.setdefault("candidate", {})["title"] = title
+    review.update(decision)
+    state["strategy_review"] = review
+
+    if keep and memory_path:
+        _append_strategy_playbook(memory_path, review)
+
+    _touch(state)
+    write_state(path, state)
+    return state, review
+
+
+def _build_strategy_review(
+    state: dict[str, Any],
+    conclusion: str,
+    evidence_ids: list[str],
+    details: dict[str, str],
+) -> dict[str, Any]:
+    action_history = state.get("action_history") or []
+    completed_actions = [
+        {
+            "action_id": item.get("action_id"),
+            "track": item.get("track"),
+            "source": item.get("source"),
+            "objective": (item.get("input") or {}).get("query") or (item.get("output") or {}).get("summary", ""),
+            "gate": item.get("gate") or {},
+        }
+        for item in action_history
+    ]
+    scenario = (state.get("problem") or {}).get("standard") or (state.get("problem") or {}).get("raw") or ""
+    return {
+        "status": "pending",
+        "created_at": now_iso(),
+        "prompt": "请确认是否将本次最终查询策略保留为同类问题的可复用策略。",
+        "candidate": {
+            "title": _strategy_title(state, details),
+            "scenario": scenario,
+            "summary": conclusion,
+            "reusable_steps": completed_actions,
+            "evidence": evidence_ids,
+            "inference_chain": details.get("inference_chain", ""),
+            "guardrails": [
+                "继续遵循 start/confirm/scene/action/evidence/conclude/report 流程。",
+                "SLS/SQL 查询仍必须使用高区分度实体和已验证字段，禁止猜关键词。",
+                "该策略只用于问题查询和定位，不代表允许修改业务代码或数据。",
+            ],
+        },
+    }
+
+
+def _strategy_title(state: dict[str, Any], details: dict[str, str]) -> str:
+    scene = (state.get("problem") or {}).get("scene") or "unknown"
+    where = details.get("where", "").strip()
+    what = details.get("what", "").strip()
+    if where and what:
+        return f"{scene}：{what} @ {where}"
+    if what:
+        return f"{scene}：{what}"
+    return f"{scene}：线上问题排查策略"
+
+
+def _append_strategy_playbook(path: str | Path, review: dict[str, Any]) -> None:
+    playbook_path = Path(path)
+    playbook_path.parent.mkdir(parents=True, exist_ok=True)
+    if playbook_path.exists() and playbook_path.read_text(encoding="utf-8").strip():
+        try:
+            payload = json.loads(playbook_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as exc:
+            raise CompassRuntimeError(f"策略库不是合法 JSON：{playbook_path}") from exc
+    else:
+        payload = {"strategies": []}
+    payload.setdefault("strategies", []).append(
+        {
+            "kept_at": review.get("decided_at"),
+            "note": review.get("note", ""),
+            **(review.get("candidate") or {}),
+        }
+    )
+    playbook_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def _validate_conclusion_details(details: dict[str, str]) -> dict[str, str]:

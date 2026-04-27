@@ -12,7 +12,7 @@ MINIMUM_REQUIRED = ("CODE_ROOT",)
 
 ADAPTER_VARIABLES: dict[str, tuple[str, ...]] = {
     "sls": ("SLS_ACCESS_KEY_ID", "SLS_ACCESS_KEY_SECRET"),
-    "platform": ("PLATFORM_BASE_URL", "PLATFORM_USERNAME", "PLATFORM_PASSWORD"),
+    "platform": ("PLATFORM_USERNAME", "PLATFORM_PASSWORD"),
     "elasticsearch": ("ES_TEST_FINANCE_PASSWORD",),
     "mysql_polardb_test": (
         "MYSQL_POLARDB_TEST_HOST",

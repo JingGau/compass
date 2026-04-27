@@ -34,6 +34,7 @@ Do not use this skill for:
 6. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节。
 7. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
 8. 最终报告必须优先由 `report --audience technical|business|review` 生成。
+9. 报告后必须主动询问用户是否保留本次最终查询策略；用户确认后用 `strategy keep` 沉淀，用户否认后用 `strategy discard` 记录原因。
 
 最小命令链：
 
@@ -66,6 +67,9 @@ python3 -m compass_cli conclude --conclusion "<结论>" --evidence E1 --confiden
   --inference-chain "<连续因果推断链>"
 python3 -m compass_cli report --audience technical
 python3 -m compass_cli report --audience review
+python3 -m compass_cli strategy keep --note "<为什么这次查法值得保留>"
+# 或
+python3 -m compass_cli strategy discard --note "<为什么不保留>"
 ```
 
 ## Hard Rules
@@ -84,6 +88,7 @@ python3 -m compass_cli report --audience review
 - Agent 使用罗盘排查时必须完整遵循 CLI Runtime 流程；禁止直接查询后再补状态，禁止绕过失败的 CLI 门禁。
 - evidence 应尽量填写 `kind / strength / raw-ref`，让证据质量进入报告。
 - 进入 `concluded` 后禁止继续追加 action/evidence；要补证据必须使用 `reopen --reason ...` 或重开 session。
+- 结论后的策略沉淀确认不得跳过；即使不保留，也要用 `strategy discard` 记录原因。
 
 Track 门禁：
 

@@ -56,14 +56,14 @@ cp .env.example .env
 最小可用配置：
 
 ```dotenv
-CODE_ROOT=/path/to/your/projects
+CODE_ROOT=/Users/<you>/workspace/projects
 ```
 
 可选 Python 覆盖配置：
 
 ```dotenv
 # 不填时自动探测；只有你想强制使用某个 Python 时才填写
-COMPASS_PYTHON=/path/to/compass/.venv/bin/python
+COMPASS_PYTHON=/Users/<you>/workspace/compass/.venv/bin/python
 ```
 
 按需数据源配置：
@@ -74,7 +74,6 @@ SLS_ACCESS_KEY_ID=
 SLS_ACCESS_KEY_SECRET=
 
 # Platform：查 prod Doris 时需要
-PLATFORM_BASE_URL=
 PLATFORM_USERNAME=
 PLATFORM_PASSWORD=
 
@@ -96,7 +95,7 @@ REDIS_FINANCE_TEST_PASSWORD=
 
 ```text
 请提供你的代码仓库根目录，例如：
-/path/to/your/projects
+/Users/xxx/workspace/projects
 ```
 
 处理规则：

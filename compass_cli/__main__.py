@@ -16,6 +16,7 @@ from compass_core.runtime import (
     complete_action,
     conclude_session,
     confirm_session,
+    decide_strategy_review,
     next_step,
     plan_action,
     record_action_result,
@@ -166,6 +167,22 @@ def build_parser() -> argparse.ArgumentParser:
     reopen.add_argument("--reason", required=True)
     reopen.add_argument("--json", action="store_true", dest="json_output")
     reopen.set_defaults(handler=handle_reopen)
+
+    strategy = subparsers.add_parser("strategy", help="confirm whether to keep the final investigation strategy")
+    strategy_sub = strategy.add_subparsers(dest="strategy_command", required=True)
+    strategy_keep = strategy_sub.add_parser("keep", help="keep this session's final query strategy")
+    strategy_keep.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    strategy_keep.add_argument("--memory-file", default=str(PROJECT_ROOT / "memory" / "strategy-playbooks.json"))
+    strategy_keep.add_argument("--title")
+    strategy_keep.add_argument("--note", default="")
+    strategy_keep.add_argument("--json", action="store_true", dest="json_output")
+    strategy_keep.set_defaults(handler=handle_strategy_keep)
+
+    strategy_discard = strategy_sub.add_parser("discard", help="discard this session's final query strategy")
+    strategy_discard.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    strategy_discard.add_argument("--note", default="")
+    strategy_discard.add_argument("--json", action="store_true", dest="json_output")
+    strategy_discard.set_defaults(handler=handle_strategy_discard)
 
     intake = subparsers.add_parser("intake", help="structure a natural-language incident description")
     intake.add_argument("text")
@@ -424,6 +441,40 @@ def handle_reopen(args: argparse.Namespace) -> int:
     else:
         print(f"已重开排查：revision={state.get('revision')}")
         print(f"原因：{args.reason}")
+    return 0
+
+
+def handle_strategy_keep(args: argparse.Namespace) -> int:
+    try:
+        state, review = decide_strategy_review(
+            args.state_file,
+            keep=True,
+            title=args.title,
+            note=args.note,
+            memory_path=args.memory_file,
+        )
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    payload = {"ok": True, "strategy_review": review, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print("已保留本次最终查询策略。")
+        print(f"标题：{review.get('candidate', {}).get('title', '')}")
+        print(f"策略库：{args.memory_file}")
+    return 0
+
+
+def handle_strategy_discard(args: argparse.Namespace) -> int:
+    try:
+        state, review = decide_strategy_review(args.state_file, keep=False, note=args.note)
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    payload = {"ok": True, "strategy_review": review, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print("已标记不保留本次最终查询策略。")
     return 0
 
 

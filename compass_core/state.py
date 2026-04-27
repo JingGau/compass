@@ -29,6 +29,7 @@ def default_state() -> dict[str, Any]:
         "action_history": [],
         "evidence_graph": {"nodes": [], "edges": []},
         "conclusion_history": [],
+        "strategy_review": {},
         "ruled_out": [],
         "next_actions": [],
     }
@@ -85,6 +86,7 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("action_history", [])
     migrated.setdefault("evidence_graph", {"nodes": [], "edges": []})
     migrated.setdefault("conclusion_history", [])
+    migrated.setdefault("strategy_review", {})
     migrated.setdefault("ruled_out", [])
     migrated.setdefault("next_actions", [])
     return migrated

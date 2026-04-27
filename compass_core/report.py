@@ -148,6 +148,8 @@ def render_technical_report(state: dict[str, Any]) -> str:
     if conclusion:
         lines.extend(["", "## 推断链", "", mask_text(details.get("inference_chain", ""))])
 
+    lines.extend(_render_strategy_review(state))
+
     lines.extend(["", "## 建议"])
     next_actions = conclusion.get("next_actions") or state.get("next_actions") or []
     if next_actions:
@@ -193,6 +195,7 @@ def render_business_report(state: dict[str, Any]) -> str:
             lines.append(f"- {item}")
     else:
         lines.append("- 建议由对应研发确认修复排期，并用同类场景回归验证。")
+    lines.extend(_render_strategy_review(state))
     return "\n".join(lines) + "\n"
 
 
@@ -271,7 +274,42 @@ def render_review_report(state: dict[str, Any]) -> str:
             lines.append(f"- [{item.get('id', 'E?')}] {mask_text(item.get('source', 'unknown'))}：{mask_text(item.get('summary', ''))}{raw_ref}")
     else:
         lines.append("- 暂无")
+    lines.extend(_render_strategy_review(state))
     return "\n".join(lines) + "\n"
+
+
+def _render_strategy_review(state: dict[str, Any]) -> list[str]:
+    review = state.get("strategy_review") or {}
+    if not review:
+        return []
+    candidate = review.get("candidate") or {}
+    lines = ["", "## 策略沉淀确认", ""]
+    lines.append(f"**状态**：{_strategy_status_label(str(review.get('status', 'pending')))}")
+    lines.append(f"**候选策略**：{mask_text(candidate.get('title', ''))}")
+    if candidate.get("scenario"):
+        lines.append(f"**适用场景**：{mask_text(candidate.get('scenario', ''))}")
+    if candidate.get("summary"):
+        lines.append(f"**本次结论**：{mask_text(candidate.get('summary', ''))}")
+    evidence = ", ".join(str(item) for item in candidate.get("evidence", []))
+    if evidence:
+        lines.append(f"**来源证据**：{mask_text(evidence)}")
+    if review.get("status") == "pending":
+        lines.extend(
+            [
+                "",
+                "请确认：是否将本次最终查询策略保留为同类问题的可复用策略？",
+                "",
+                "- 保留：`python3 -m compass_cli strategy keep --note \"<为什么值得保留>\"`",
+                "- 不保留：`python3 -m compass_cli strategy discard --note \"<不保留原因>\"`",
+            ]
+        )
+    elif review.get("note"):
+        lines.append(f"**备注**：{mask_text(review.get('note', ''))}")
+    return lines
+
+
+def _strategy_status_label(status: str) -> str:
+    return {"pending": "待确认", "kept": "已保留", "discarded": "不保留"}.get(status, status)
 
 
 def _confidence_label(value: str) -> str:
