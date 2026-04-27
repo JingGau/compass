@@ -172,7 +172,7 @@ def build_parser() -> argparse.ArgumentParser:
     strategy_sub = strategy.add_subparsers(dest="strategy_command", required=True)
     strategy_keep = strategy_sub.add_parser("keep", help="keep this session's final query strategy")
     strategy_keep.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
-    strategy_keep.add_argument("--memory-file", default=str(PROJECT_ROOT / "memory" / "strategy-playbooks.json"))
+    strategy_keep.add_argument("--memory-file", default=str(PROJECT_ROOT / "memory" / "strategies.yaml"))
     strategy_keep.add_argument("--title")
     strategy_keep.add_argument("--note", default="")
     strategy_keep.add_argument("--json", action="store_true", dest="json_output")

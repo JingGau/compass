@@ -341,7 +341,7 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert "## 策略沉淀确认" in report.stdout
     assert "是否将本次最终查询策略保留" in report.stdout
 
-    memory_file = tmp_path / "strategy-playbooks.json"
+    memory_file = tmp_path / "strategies.yaml"
     kept = run_cli(
         "strategy",
         "keep",
@@ -356,8 +356,15 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert kept.returncode == 0, kept.stderr
     kept_payload = json.loads(kept.stdout)
     assert kept_payload["strategy_review"]["status"] == "kept"
-    memory_payload = json.loads(memory_file.read_text(encoding="utf-8"))
-    assert memory_payload["strategies"][0]["summary"] == "礼品卡在 guan-zhong payment-ways-v2 链路被过滤"
+    import yaml
+
+    memory_payload = yaml.safe_load(memory_file.read_text(encoding="utf-8"))
+    strategy = memory_payload["strategies"][0]
+    assert strategy["pattern"]["category"] == "payment"
+    assert strategy["pattern"]["entity_types"] == ["phone", "time_range"]
+    assert strategy["score"]["effectiveness"] == 0.0
+    assert strategy["meta"]["source_summary"] == "礼品卡在 guan-zhong payment-ways-v2 链路被过滤"
+    assert strategy["meta"]["note"] == "App 支付方式过滤类问题可复用"
 
 
 def test_report_renders_structured_technical_and_business_views(tmp_path: Path) -> None:

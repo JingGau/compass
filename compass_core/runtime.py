@@ -569,7 +569,7 @@ def decide_strategy_review(
     state["strategy_review"] = review
 
     if keep and memory_path:
-        _append_strategy_playbook(memory_path, review)
+        _append_strategy_memory(memory_path, review)
 
     _touch(state)
     write_state(path, state)
@@ -594,6 +594,8 @@ def _build_strategy_review(
         for item in action_history
     ]
     scenario = (state.get("problem") or {}).get("standard") or (state.get("problem") or {}).get("raw") or ""
+    entity_types = [key for key, value in (state.get("entities") or {}).items() if value not in (None, "", [])]
+    services = _strategy_services(completed_actions)
     return {
         "status": "pending",
         "created_at": now_iso(),
@@ -601,6 +603,11 @@ def _build_strategy_review(
         "candidate": {
             "title": _strategy_title(state, details),
             "scenario": scenario,
+            "scene": (state.get("problem") or {}).get("scene", ""),
+            "entity_types": entity_types,
+            "services": services,
+            "source_session_id": state.get("session_id", ""),
+            "source_revision": state.get("revision", 1),
             "summary": conclusion,
             "reusable_steps": completed_actions,
             "evidence": evidence_ids,
@@ -625,24 +632,124 @@ def _strategy_title(state: dict[str, Any], details: dict[str, str]) -> str:
     return f"{scene}：线上问题排查策略"
 
 
-def _append_strategy_playbook(path: str | Path, review: dict[str, Any]) -> None:
-    playbook_path = Path(path)
-    playbook_path.parent.mkdir(parents=True, exist_ok=True)
-    if playbook_path.exists() and playbook_path.read_text(encoding="utf-8").strip():
-        try:
-            payload = json.loads(playbook_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError as exc:
-            raise CompassRuntimeError(f"策略库不是合法 JSON：{playbook_path}") from exc
-    else:
-        payload = {"strategies": []}
-    payload.setdefault("strategies", []).append(
-        {
-            "kept_at": review.get("decided_at"),
+def _strategy_services(actions: list[dict[str, Any]]) -> list[str]:
+    services: list[str] = []
+    for action in actions:
+        source = str(action.get("source") or "").strip()
+        if source and source not in services:
+            services.append(source)
+    return services
+
+
+def _append_strategy_memory(path: str | Path, review: dict[str, Any]) -> None:
+    memory_path = Path(path)
+    memory_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = _read_strategy_memory(memory_path)
+    strategies = payload.setdefault("strategies", [])
+    candidate = review.get("candidate") or {}
+    strategy = _build_strategy_memory_entry(candidate, review, sequence=len(strategies) + 1)
+    strategies.append(strategy)
+    _write_strategy_memory(memory_path, payload)
+
+
+def _build_strategy_memory_entry(candidate: dict[str, Any], review: dict[str, Any], *, sequence: int) -> dict[str, Any]:
+    created_at = str(review.get("decided_at") or now_iso())
+    title = str(candidate.get("title") or "线上问题排查策略")
+    return {
+        "id": _strategy_memory_id(title, created_at, sequence),
+        "pattern": {
+            "category": candidate.get("scene") or "unknown",
+            "keywords": _strategy_keywords(candidate),
+            "entity_types": candidate.get("entity_types") or [],
+            "services": candidate.get("services") or [],
+            "scene": candidate.get("scene") or "unknown",
+        },
+        "plan": _strategy_plan(candidate.get("reusable_steps") or []),
+        "score": {
+            "effectiveness": 0.0,
+            "usage_count": 0,
+            "last_used": None,
+            "avg_rounds": None,
+            "user_ratings": [],
+            "modification_count": 0,
+        },
+        "meta": {
+            "created_at": created_at,
+            "created_from": "first_use",
+            "last_updated": created_at,
+            "related_projects": [],
+            "pinned": False,
+            "source_session_id": candidate.get("source_session_id", ""),
+            "source_revision": candidate.get("source_revision", 1),
+            "source_summary": candidate.get("summary", ""),
+            "source_evidence": candidate.get("evidence") or [],
             "note": review.get("note", ""),
-            **(review.get("candidate") or {}),
-        }
+        },
+    }
+
+
+def _strategy_plan(actions: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    plan: list[dict[str, Any]] = []
+    for index, action in enumerate(actions, start=1):
+        gate = action.get("gate") or {}
+        objective = str(action.get("objective") or "").strip()
+        plan.append(
+            {
+                "step": index,
+                "adapter": str(action.get("track") or action.get("source") or "manual"),
+                "action": objective or "按本次证据链继续查询",
+                "template": objective,
+                "env_profile": gate.get("env") or gate.get("environment") or "prod",
+                "source": str(action.get("source") or ""),
+            }
+        )
+    return plan
+
+
+def _strategy_keywords(candidate: dict[str, Any]) -> list[str]:
+    text = " ".join(
+        str(candidate.get(key) or "")
+        for key in ("title", "scenario", "summary", "inference_chain")
     )
-    playbook_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    words = re.findall(r"[A-Za-z][A-Za-z0-9_-]{2,}|[\u4e00-\u9fff]{2,}", text)
+    keywords: list[str] = []
+    for word in words:
+        if word not in keywords:
+            keywords.append(word)
+        if len(keywords) >= 8:
+            break
+    return keywords
+
+
+def _strategy_memory_id(title: str, created_at: str, sequence: int) -> str:
+    slug = re.sub(r"[^A-Za-z0-9]+", "_", title).strip("_").lower()[:32] or "online_issue"
+    day = created_at[:10].replace("-", "") if len(created_at) >= 10 else "unknown"
+    return f"strategy_{slug}_{day}_{sequence}"
+
+
+def _read_strategy_memory(path: Path) -> dict[str, Any]:
+    if not path.exists() or not path.read_text(encoding="utf-8").strip():
+        return {"strategies": []}
+    text = path.read_text(encoding="utf-8")
+    try:
+        import yaml  # type: ignore
+
+        return yaml.safe_load(text) or {"strategies": []}
+    except ModuleNotFoundError:
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise CompassRuntimeError(f"策略库不是合法 YAML/JSON：{path}") from exc
+
+
+def _write_strategy_memory(path: Path, payload: dict[str, Any]) -> None:
+    try:
+        import yaml  # type: ignore
+
+        text = yaml.safe_dump(payload, allow_unicode=True, sort_keys=False)
+    except ModuleNotFoundError:
+        text = json.dumps(payload, ensure_ascii=False, indent=2)
+    path.write_text(text, encoding="utf-8")
 
 
 def _validate_conclusion_details(details: dict[str, str]) -> dict[str, str]:
