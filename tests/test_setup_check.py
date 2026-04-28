@@ -47,8 +47,12 @@ class SetupCheckTest(unittest.TestCase):
                 "\n".join(
                     [
                         f"CODE_ROOT={code_root}",
-                        "SLS_ACCESS_KEY_ID=ak",
-                        "SLS_ACCESS_KEY_SECRET=sk",
+                        "SLS[0].NAME=PROD",
+                        "SLS[0].ENV=prod",
+                        "SLS[0].ENDPOINT=cn-hangzhou.log.aliyuncs.com",
+                        "SLS[0].PROJECT=project-prod",
+                        "SLS[0].ACCESS_KEY_ID=ak",
+                        "SLS[0].ACCESS_KEY_SECRET=sk",
                     ]
                 ),
                 encoding="utf-8",
@@ -56,7 +60,13 @@ class SetupCheckTest(unittest.TestCase):
 
             report = inspect_setup(
                 root,
-                environ={"PLATFORM_USERNAME": "user", "PLATFORM_PASSWORD": "pass"},
+                environ={
+                    "PLATFORM[0].NAME": "PROD",
+                    "PLATFORM[0].ENV": "prod",
+                    "PLATFORM[0].BASE_URL": "http://platform.example.com",
+                    "PLATFORM[0].USERNAME": "user",
+                    "PLATFORM[0].PASSWORD": "pass",
+                },
             )
 
             self.assertTrue(report.adapter_status["sls"].configured)

@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import re
 from pathlib import Path
-from typing import Optional
+from typing import Mapping, Optional
 
 import yaml
 
@@ -29,6 +29,34 @@ if _dotenv.exists():
             os.environ.setdefault(_k.strip(), _v.strip())
 
 _ENV_VAR_PATTERN = re.compile(r'\$\{([^}:]+)(?::-(.*?))?\}')
+_ENV_PROFILE_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)\[(\d+)\]\.([A-Z0-9_]+)$")
+_INT_FIELDS = {"port", "db", "timeout", "export_timeout"}
+_FIELD_ALIASES = {
+    "desc": "description",
+    "database": "database",
+    "db": "db",
+    "env": "env",
+    "host": "host",
+    "hosts": "hosts",
+    "link": "link",
+    "logstore": "logstore",
+    "mode": "mode",
+    "name": "name",
+    "password": "password",
+    "port": "port",
+    "project": "project",
+    "url": "url",
+    "user": "user",
+    "username": "username",
+    "endpoint": "endpoint",
+    "access_key_id": "access_key_id",
+    "access_key_secret": "access_key_secret",
+    "base_url": "base_url",
+    "header_user": "header_user",
+    "header_pass": "header_pass",
+    "timeout": "timeout",
+    "export_timeout": "export_timeout",
+}
 
 
 def _resolve_env_vars(value):
@@ -54,6 +82,46 @@ def _resolve_env_vars(value):
             return int(resolved)
         return resolved
     return value
+
+
+def _coerce_profile_value(field: str, value: str):
+    if field in _INT_FIELDS and re.fullmatch(r"-?\d+", value):
+        return int(value)
+    if field == "hosts":
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
+def build_profiles_from_env(prefix: str, environ: Mapping[str, str] | None = None) -> list[dict]:
+    """从 REDIS[0].HOST 这类数组式环境变量生成 profiles。
+
+    字段名统一转成小写蛇形字段；DESC 会映射为 description。
+    """
+    source = os.environ if environ is None else environ
+    wanted = prefix.upper()
+    buckets: dict[int, dict] = {}
+    for key, raw_value in source.items():
+        match = _ENV_PROFILE_PATTERN.match(key)
+        if not match:
+            continue
+        current_prefix, index_raw, field_raw = match.groups()
+        if current_prefix != wanted:
+            continue
+        field_key = field_raw.lower()
+        field = _FIELD_ALIASES.get(field_key, field_key)
+        buckets.setdefault(int(index_raw), {})[field] = _coerce_profile_value(field, raw_value)
+    return [buckets[index] for index in sorted(buckets)]
+
+
+def _apply_dynamic_profiles(cfg: dict) -> dict:
+    prefix = cfg.get("profiles_from_env")
+    if not prefix:
+        return cfg
+    cfg["profiles"] = build_profiles_from_env(str(prefix))
+    default_profile = cfg.get("default_profile")
+    if not default_profile and cfg["profiles"]:
+        cfg["default_profile"] = cfg["profiles"][0].get("name")
+    return cfg
 
 
 DISABLED_RESP = {
@@ -83,7 +151,7 @@ def load_config(config_path: Optional[str] = None, caller_file: Optional[str] = 
         raise ValueError(f"配置文件 YAML 格式错误: {path} — {e}")
     if cfg is None:
         raise ValueError(f"配置文件为空: {path}")
-    return _resolve_env_vars(cfg)
+    return _apply_dynamic_profiles(_resolve_env_vars(cfg))
 
 
 def validate_config(cfg: dict, required_keys: list[str], adapter_name: str = "adapter") -> None:

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 import os
 from pathlib import Path
+import re
 from typing import Mapping
 
 from tools.python_env import PythonEnvironmentReport, detect_python_environment
@@ -10,22 +11,14 @@ from tools.python_env import PythonEnvironmentReport, detect_python_environment
 
 MINIMUM_REQUIRED = ("CODE_ROOT",)
 
-ADAPTER_VARIABLES: dict[str, tuple[str, ...]] = {
-    "sls": ("SLS_ACCESS_KEY_ID", "SLS_ACCESS_KEY_SECRET"),
-    "platform": ("PLATFORM_USERNAME", "PLATFORM_PASSWORD"),
-    "elasticsearch": ("ES_TEST_FINANCE_PASSWORD",),
-    "mysql_polardb_test": (
-        "MYSQL_POLARDB_TEST_HOST",
-        "MYSQL_POLARDB_TEST_USER",
-        "MYSQL_POLARDB_TEST_PASSWORD",
-    ),
-    "mysql_main_test": (
-        "MYSQL_MAIN_TEST_HOST",
-        "MYSQL_MAIN_TEST_USER",
-        "MYSQL_MAIN_TEST_PASSWORD",
-    ),
-    "redis_finance_test": ("REDIS_FINANCE_TEST_HOST", "REDIS_FINANCE_TEST_PASSWORD"),
+ADAPTER_PROFILE_REQUIREMENTS: dict[str, tuple[str, tuple[str, ...]]] = {
+    "sls": ("SLS", ("NAME", "ENV", "ENDPOINT", "PROJECT", "ACCESS_KEY_ID", "ACCESS_KEY_SECRET")),
+    "platform": ("PLATFORM", ("NAME", "ENV", "BASE_URL", "USERNAME", "PASSWORD")),
+    "elasticsearch": ("ES", ("NAME", "ENV", "URL", "USERNAME", "PASSWORD")),
+    "mysql": ("MYSQL", ("NAME", "ENV", "HOST", "PORT", "USER", "PASSWORD", "DATABASE")),
+    "redis": ("REDIS", ("NAME", "ENV", "HOST", "PORT", "PASSWORD", "DB")),
 }
+_PROFILE_KEY_PATTERN = re.compile(r"^([A-Z][A-Z0-9_]*)\[(\d+)\]\.([A-Z0-9_]+)$")
 
 
 @dataclass
@@ -33,6 +26,7 @@ class AdapterSetupStatus:
     name: str
     configured: bool
     missing_variables: list[str] = field(default_factory=list)
+    profiles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -63,12 +57,14 @@ def inspect_setup(root: str | Path, environ: Mapping[str, str] | None = None) ->
         code_root_exists = True
 
     adapter_status: dict[str, AdapterSetupStatus] = {}
-    for adapter, variables in ADAPTER_VARIABLES.items():
-        missing = [name for name in variables if not _has_value(values.get(name))]
+    for adapter, (prefix, required_fields) in ADAPTER_PROFILE_REQUIREMENTS.items():
+        profile_values = _profiles_by_prefix(values, prefix)
+        missing = _missing_profile_fields(profile_values, prefix, required_fields)
         adapter_status[adapter] = AdapterSetupStatus(
             name=adapter,
             configured=not missing,
             missing_variables=missing,
+            profiles=[profile.get("NAME", f"{prefix}[{idx}]") for idx, profile in sorted(profile_values.items())],
         )
 
     minimum_ready = env_path.exists() and not missing_minimum and code_root_exists
@@ -103,7 +99,8 @@ def render_setup_report(report: SetupReport) -> str:
     lines.append("### Adapter 凭证")
     for status in report.adapter_status.values():
         if status.configured:
-            lines.append(f"- {status.name}：已配置")
+            profile_text = f"（{', '.join(status.profiles)}）" if status.profiles else ""
+            lines.append(f"- {status.name}：已配置{profile_text}")
         else:
             lines.append(f"- {status.name}：未配置（缺少 {', '.join(status.missing_variables)}）")
 
@@ -139,6 +136,34 @@ def _strip_quotes(value: str) -> str:
 
 def _has_value(value: str | None) -> bool:
     return bool(value and value.strip())
+
+
+def _profiles_by_prefix(values: Mapping[str, str], prefix: str) -> dict[int, dict[str, str]]:
+    profiles: dict[int, dict[str, str]] = {}
+    for key, value in values.items():
+        match = _PROFILE_KEY_PATTERN.match(key)
+        if not match:
+            continue
+        current_prefix, index_raw, field = match.groups()
+        if current_prefix != prefix:
+            continue
+        profiles.setdefault(int(index_raw), {})[field] = value
+    return profiles
+
+
+def _missing_profile_fields(
+    profiles: dict[int, dict[str, str]],
+    prefix: str,
+    required_fields: tuple[str, ...],
+) -> list[str]:
+    if not profiles:
+        return [f"{prefix}[0].{field}" for field in required_fields]
+    missing: list[str] = []
+    for index, profile in sorted(profiles.items()):
+        for field in required_fields:
+            if not _has_value(profile.get(field)):
+                missing.append(f"{prefix}[{index}].{field}")
+    return missing
 
 
 def _next_steps(

@@ -1,14 +1,4 @@
 enabled: true
-
-endpoint: "cn-hangzhou.log.aliyuncs.com"
-access_key_id: "${SLS_ACCESS_KEY_ID}"
-access_key_secret: "${SLS_ACCESS_KEY_SECRET}"
-
-logstore: "all"
-
-projects:
-  prod: "k8s-log-c7fd130d77f0f4627ac91c831bffeb751"
-  test: "k8s-log-caf7dea70bc8a4de89a230c59deacdd73"
-  uat: "k8s-log-cc16e3815a19540a98bbc94d1e7bde437"
-
-default_env: "prod"
+profiles_from_env: "SLS"
+default_profile: "${SLS_DEFAULT_PROFILE}"
+default_env: "${SLS_DEFAULT_ENV:-prod}"

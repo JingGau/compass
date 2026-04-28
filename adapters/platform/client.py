@@ -21,7 +21,7 @@ _ADAPTERS_DIR = Path(__file__).resolve().parent.parent
 if str(_ADAPTERS_DIR.parent) not in sys.path:
     sys.path.insert(0, str(_ADAPTERS_DIR.parent))
 
-from adapters.base import BaseAdapter
+from adapters.base import MultiProfileAdapter
 
 
 # ── SQL 安全分析 ──────────────────────────────────────────────────────────────
@@ -73,26 +73,36 @@ def _parse_sse(raw: str) -> Any:
     return None
 
 
-class PlatformClient(BaseAdapter):
+class PlatformClient(MultiProfileAdapter):
     """平台数据查询客户端，封装 Doris SQL 的执行和结果解析。"""
 
     ADAPTER_NAME = "platform"
-    REQUIRED_CONFIG_KEYS = ["base_url", "auth"]
+    REQUIRED_CONFIG_KEYS = ["profiles"]
 
     def __init__(self, config_path: Optional[str] = None):
         super().__init__(config_path, caller_file=__file__)
-        self.base_url = self._cfg["base_url"].rstrip("/")
-        self.auth_headers = {
-            self._cfg["auth"]["header_user"]: self._cfg["auth"]["username"],
-            self._cfg["auth"]["header_pass"]: self._cfg["auth"]["password"],
+        self.timeout = 30
+        self.export_timeout = 120
+
+    def _profile_request_config(self, profile_name: Optional[str] = None) -> tuple[str, dict, int, int]:
+        profile = self._get_profile(profile_name)
+        base_url = profile["base_url"].rstrip("/")
+        headers = {
+            profile.get("header_user", "X-User-Name"): profile["username"],
+            profile.get("header_pass", "X-Password"): profile["password"],
             "Content-Type": "application/json",
             "Accept": "application/json, text/event-stream",
         }
-        self.timeout = self._cfg.get("timeout", 30)
-        self.export_timeout = self._cfg.get("export_timeout", 120)
+        return (
+            base_url,
+            headers,
+            int(profile.get("timeout", self.timeout)),
+            int(profile.get("export_timeout", self.export_timeout)),
+        )
 
-    def _call(self, tool: str, arguments: dict, timeout: Optional[int] = None) -> dict:
+    def _call(self, tool: str, arguments: dict, timeout: Optional[int] = None, profile_name: Optional[str] = None) -> dict:
         """发起一次 JSON-RPC 调用，返回解析后的业务数据。"""
+        base_url, auth_headers, default_timeout, _ = self._profile_request_config(profile_name)
         payload = {
             "jsonrpc": "2.0",
             "id": 1,
@@ -101,10 +111,10 @@ class PlatformClient(BaseAdapter):
         }
         try:
             resp = httpx.post(
-                f"{self.base_url}/mcp",
-                headers=self.auth_headers,
+                f"{base_url}/mcp",
+                headers=auth_headers,
                 json=payload,
-                timeout=timeout or self.timeout,
+                timeout=timeout or default_timeout,
             )
             resp.raise_for_status()
             data = _parse_sse(resp.text)
@@ -112,7 +122,7 @@ class PlatformClient(BaseAdapter):
                 return {"success": False, "data": None, "error": "无法解析响应"}
             return {"success": True, "data": data, "error": None}
         except httpx.TimeoutException:
-            return {"success": False, "data": None, "error": f"请求超时（>{timeout or self.timeout}s）"}
+            return {"success": False, "data": None, "error": f"请求超时（>{timeout or default_timeout}s）"}
         except httpx.HTTPStatusError as e:
             return {"success": False, "data": None, "error": f"HTTP 错误 {e.response.status_code}"}
         except Exception as e:
@@ -128,16 +138,17 @@ class PlatformClient(BaseAdapter):
 
     def health_check(self) -> dict:
         """验证连通性：执行一条简单 SQL，返回标准结构。"""
+        profile = self._get_profile()
         if not self._enabled:
-            return self._health_payload(status="disabled", environment="prod")
+            return self._health_payload(status="disabled", environment=profile.get("env"))
         start = time.perf_counter()
         result = self._call("query_doris", {"sql": "SELECT 1"})
         elapsed = int((time.perf_counter() - start) * 1000)
         if result["success"]:
-            return self._health_payload(status="ok", latency_ms=elapsed, environment="prod")
-        return self._health_payload(status="error", latency_ms=elapsed, environment="prod", error=result["error"])
+            return self._health_payload(status="ok", latency_ms=elapsed, environment=profile.get("env"))
+        return self._health_payload(status="error", latency_ms=elapsed, environment=profile.get("env"), error=result["error"])
 
-    def query_sql(self, sql: str) -> dict:
+    def query_sql(self, sql: str, profile_name: Optional[str] = None) -> dict:
         """
         执行 Doris SQL，返回结构化结果。
         返回: { success, data: { columns, rows }, error }
@@ -147,9 +158,9 @@ class PlatformClient(BaseAdapter):
         blocked = self._guard_sql(sql)
         if blocked:
             return blocked
-        return self._call("query_doris", {"sql": sql})
+        return self._call("query_doris", {"sql": sql}, profile_name=profile_name)
 
-    def count(self, sql: str) -> dict:
+    def count(self, sql: str, profile_name: Optional[str] = None) -> dict:
         """
         查询总条数。sql 应为原始查询（不含 COUNT），方法内部自动包装。
         返回: { success, data: int, error }
@@ -160,7 +171,7 @@ class PlatformClient(BaseAdapter):
         if blocked:
             return blocked
         count_sql = f"SELECT COUNT(*) AS cnt FROM ({sql}) t"
-        result = self._call("get_query_count", {"sql": count_sql})
+        result = self._call("get_query_count", {"sql": count_sql}, profile_name=profile_name)
         if not result["success"]:
             return result
         try:
@@ -170,7 +181,7 @@ class PlatformClient(BaseAdapter):
         except (IndexError, ValueError, TypeError) as e:
             return {"success": False, "data": None, "error": f"解析 count 失败: {e}"}
 
-    def export_async(self, sql: str, oss_path: Optional[str] = None) -> dict:
+    def export_async(self, sql: str, oss_path: Optional[str] = None, profile_name: Optional[str] = None) -> dict:
         """
         创建异步导出任务，适用于大结果集（> 1000 条）。
         返回: { success, data: { task_id }, error }
@@ -183,31 +194,32 @@ class PlatformClient(BaseAdapter):
         args: dict = {"sql": sql}
         if oss_path:
             args["oss_path"] = oss_path
-        return self._call("create_oss_export_task_async", args, timeout=self.export_timeout)
+        _, _, _, export_timeout = self._profile_request_config(profile_name)
+        return self._call("create_oss_export_task_async", args, timeout=export_timeout, profile_name=profile_name)
 
-    def get_export_status(self, task_id: str) -> dict:
+    def get_export_status(self, task_id: str, profile_name: Optional[str] = None) -> dict:
         """查询异步导出任务进度和下载链接。"""
         if not self._enabled:
             return self._disabled_response()
-        return self._call("get_doris_export_status", {"task_id": task_id})
+        return self._call("get_doris_export_status", {"task_id": task_id}, profile_name=profile_name)
 
-    def list_databases(self) -> dict:
+    def list_databases(self, profile_name: Optional[str] = None) -> dict:
         """列出所有可用数据库。"""
         if not self._enabled:
             return self._disabled_response()
-        return self._call("query_doris", {"sql": "SHOW DATABASES"})
+        return self._call("query_doris", {"sql": "SHOW DATABASES"}, profile_name=profile_name)
 
-    def list_tables(self, database: str) -> dict:
+    def list_tables(self, database: str, profile_name: Optional[str] = None) -> dict:
         """列出指定数据库的所有表。"""
         if not self._enabled:
             return self._disabled_response()
-        return self._call("query_doris", {"sql": f"SHOW TABLES FROM `{database}`"})
+        return self._call("query_doris", {"sql": f"SHOW TABLES FROM `{database}`"}, profile_name=profile_name)
 
-    def describe_table(self, table: str) -> dict:
+    def describe_table(self, table: str, profile_name: Optional[str] = None) -> dict:
         """查看表结构（支持 db.table 格式）。"""
         if not self._enabled:
             return self._disabled_response()
-        return self._call("query_doris", {"sql": f"DESC {table}"})
+        return self._call("query_doris", {"sql": f"DESC {table}"}, profile_name=profile_name)
 
 
 if __name__ == "__main__":

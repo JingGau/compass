@@ -1,55 +1,263 @@
-# Compass Harness
+# Compass Harness（罗盘）
 
-Compass Harness 是一个本地优先的线上问题排查底座，用来给 Codex、Claude Code、OpenClaw、Hermes 等 Agent 提供稳定的排查入口。
+Compass 是一个本地优先的线上问题排查 Skill。它把用户的自然语言问题转成可执行的排查工单，通过代码、日志、数据库、缓存和知识库建立证据链，最后输出可追溯结论。
 
-它不是公共 MCP 服务，也不是独立替代 Agent 的大模型应用。它的定位是：
-
-```text
-Agent -> Skill -> CLI -> Core -> Adapter -> Data Source
-```
-
-## 当前架构
+它不是公共 MCP 服务，也不是单独的大模型应用。推荐使用方式是：
 
 ```text
-compass-harness/
-  SKILL.md              # 给 Agent 的总排查规则
-  compass_cli/          # CLI 入口，所有 Agent 都能通过命令行调用
-  compass_core/         # intake / kb / state / report 等核心能力
-  adapters/             # mysql / redis / sls / es / platform 数据源适配
-  guards/               # SQL / Redis / ES / 脱敏 / 查询限制
-  knowledge/            # 本地 Markdown 知识库
-  memory/               # 本地排查状态、策略、用户决策
-  projects/             # 项目上下文
-  prompts/              # 场景分类、实体提取、查询规划、结果分析
-  tools/                # 证据图、状态机、setup check 等底层工具
+User -> Agent -> Compass Skill -> CLI Runtime -> Adapter -> Data Source
 ```
 
-## CLI Quick Start
+## 适合什么场景
 
-在项目根目录执行：
+- C 端、B 端、财务、订单、充电等线上问题排查。
+- 用户输入不完整，需要先结构化问题、补实体、再排查。
+- 需要同时看代码、SLS 日志、SQL、Redis、ES、业务知识库的问题。
+- 需要输出“根因、证据、影响面、待验证假设、后续建议”的问题。
+
+不适合用来直接修代码、执行写 SQL、泛查日志、绕过权限或脱敏规则。
+
+## 从零开始的推荐路径
+
+第一次使用时，按这个顺序走：
+
+1. 复制 `.env.example` 为 `.env`，先填 `CODE_ROOT`。
+2. 运行 `setup-check`，确认最小配置可用。
+3. 按需填写 SLS / Platform / MySQL / Redis / ES 环境变量。
+4. 注册或扫描项目，生成 `projects/<服务名>.md` 代码导航地图。
+5. 用自然语言提问，例如“使用罗盘查线上问题：...”，首轮确认方案后再开始查询。
+
+如果只是让 Compass 帮你读代码链路，通常只需要完成第 1、2、4 步；如果要查线上日志和数据，再补第 3 步。
+
+## 目录说明
+
+```text
+compass/
+  SKILL.md              # Agent 必须遵循的排查规则
+  README.md             # 给用户看的使用说明
+  .env.example          # 本机配置模板
+  compass_cli/          # CLI 入口
+  compass_core/         # 状态机、intake、报告、证据链
+  adapters/             # sls / platform / mysql / redis / elasticsearch
+  guards/               # SQL / Redis / ES / SLS / 脱敏 / 查询限制
+  knowledge/            # 本地知识库
+  memory/               # 本地策略、状态、审计记录
+  projects/             # 代码导航地图
+  prompts/              # setup、项目注册、查询规划、结果分析流程
+  tools/                # setup check、证据图、上下文注入等工具
+```
+
+## 首次配置
+
+进入 Compass 目录后，先复制配置模板：
+
+```bash
+cd /Users/dongmaowei/.cursor/skills/compass
+cp .env.example .env
+```
+
+最小可用配置只需要 `CODE_ROOT`，用于让 Compass 找到本机代码仓库：
+
+```dotenv
+CODE_ROOT=/Users/<you>/workspace/projects
+```
+
+所有数据源都使用数组式 profile 配置：
+
+```dotenv
+# 通用格式：ADAPTER[index].FIELD=value
+# 通用字段：NAME / ENV / DESC / LINK
+```
+
+如果要查 SLS 日志，补充：
+
+```dotenv
+SLS_DEFAULT_ENV=prod
+SLS[0].NAME=PROD
+SLS[0].ENV=prod
+SLS[0].DESC=生产环境 SLS 日志 Project
+SLS[0].ENDPOINT=cn-hangzhou.log.aliyuncs.com
+SLS[0].PROJECT=
+SLS[0].ACCESS_KEY_ID=
+SLS[0].ACCESS_KEY_SECRET=
+SLS[0].LOGSTORE=all
+SLS[0].LINK=
+```
+
+如果要查 Redis / MySQL / Platform / ES，再按需增加 profile：
+
+```dotenv
+REDIS_DEFAULT_PROFILE=FINANCE_TEST
+REDIS[0].NAME=FINANCE_TEST
+REDIS[0].ENV=test
+REDIS[0].DESC=财务测试环境 Redis，钱包/清分相关缓存
+REDIS[0].HOST=
+REDIS[0].PORT=6379
+REDIS[0].PASSWORD=
+REDIS[0].DB=30
+REDIS[0].LINK=
+
+MYSQL_DEFAULT_PROFILE=FINANCE_TEST
+MYSQL[0].NAME=FINANCE_TEST
+MYSQL[0].ENV=test
+MYSQL[0].DESC=财务测试环境 MySQL/PolarDB
+MYSQL[0].HOST=
+MYSQL[0].PORT=3306
+MYSQL[0].USER=
+MYSQL[0].PASSWORD=
+MYSQL[0].DATABASE=yunkc_finance
+MYSQL[0].LINK=
+
+PLATFORM_DEFAULT_PROFILE=PROD
+PLATFORM[0].NAME=PROD
+PLATFORM[0].ENV=prod
+PLATFORM[0].DESC=生产环境 Doris 查询平台
+PLATFORM[0].BASE_URL=http://10.20.0.2:8081
+PLATFORM[0].USERNAME=
+PLATFORM[0].PASSWORD=
+
+ES_DEFAULT_PROFILE=FINANCE_TEST
+ES[0].NAME=FINANCE_TEST
+ES[0].ENV=test
+ES[0].DESC=财务测试环境 ES
+ES[0].URL=
+ES[0].USERNAME=elastic
+ES[0].PASSWORD=
+```
+
+`.env` 是本机私有配置，已被 `.gitignore` 排除，不要提交真实凭证。
+
+## 配置检查
+
+配置完成后运行：
 
 ```bash
 python3 -m compass_cli setup-check --json
-python3 -m compass_cli intake "用户支付成功但订单没有推进，订单号 123456，今天上午" --json
-python3 -m compass_cli kb search "清分单 入金通知" --json
-python3 -m compass_cli state show --json
-python3 -m compass_cli report --format markdown
 ```
 
-## Controlled Runtime Flow
+检查重点：
 
-线上排查应优先使用受控会话命令，让 CLI 负责状态机和证据门禁：
+- `.env` 是否存在。
+- `CODE_ROOT` 是否填写且路径存在。
+- Python 版本是否为 3.10+。
+- SLS / Platform / MySQL / Redis / ES 哪些 adapter 已可用。
+- 哪些 adapter 缺少变量，以及缺失后影响哪条排查轨道。
+
+只做代码排查时，数据源凭证可以先不填；对应 adapter 会标记为不可用，但不会阻断代码轨。
+
+## 配置代码仓库
+
+默认情况下，Compass 会从 `.env` 的 `CODE_ROOT` 找项目。目录结构简单时，只配 `CODE_ROOT` 即可。
+
+如果项目名和目录不一致，或者项目位于多层目录下，复制并修改 `config/code-repos.yaml`：
+
+```bash
+cp config/code-repos.yaml.example config/code-repos.yaml
+```
+
+示例：
+
+```yaml
+code_root: ${CODE_ROOT}
+
+projects:
+  omp-shop: OMP/omp-shop
+  finance_server: FINANCE/finance_server
+  order_server: TRADE/order_server
+```
+
+路径规则：
+
+- 绝对路径会直接使用。
+- 相对路径会拼接 `CODE_ROOT`。
+- 未配置的项目会尝试在 `CODE_ROOT` 下按项目名发现。
+
+## 根据代码地址扫描项目
+
+Compass 需要 `projects/<name>.md` 作为代码导航地图。这个文件会记录 Controller、Service、Mapper、表、Redis key、日志关键字、页面和接口映射。
+
+单个项目注册时，可以这样对 Agent 说：
+
+```text
+使用 compass 注册 finance_server，代码路径是 /Users/me/workspace/projects/FINANCE/finance_server
+```
+
+如果项目已经在 `config/code-repos.yaml` 中配置，也可以只说：
+
+```text
+使用 compass 注册 finance_server
+```
+
+扫描规则：
+
+- Java 后端：扫描 Controller -> Service -> Mapper/XML -> Entity -> Redis key -> 日志关键字。
+- Vue 前端：扫描 router -> api -> views，建立页面到后端接口的映射。
+- React 前端：扫描 pages/router -> api -> components，建立页面到接口的映射。
+- Python 服务：扫描入口、路由装饰器、handler/service、依赖文件。
+
+批量扫描前端和关联后端时，可以说：
+
+```text
+使用 compass 扫描前端整理知识，项目是 omp-shop，选择 C：前端到后端全链路深度扫描
+```
+
+扫描完成后，Agent 应展示将要写入的 `projects/*.md` 内容或 diff，确认后再写入。已有同名文件时，应先展示差异，不要直接覆盖。
+
+## 怎么提问
+
+最有效的问题包含“现象 + 定位实体 + 时间范围”。例如：
+
+```text
+使用罗盘排查：用户支付成功但订单没有推进，订单号 123456，今天上午 10:00 到 10:30。
+```
+
+```text
+使用 compass 查一下：手机号 15921195068 在今天下午切换支付方式后礼品卡不展示。
+```
+
+```text
+用罗盘看 B 端问题：运营在 omp-shop 账户管理页面给机构充值失败，机构 ID 是 10001，操作时间 2026-04-28 10:20 左右。
+```
+
+```text
+使用 compass 只走代码轨：帮我从 omp-shop 页面入口追到 finance_server 后端接口，不查线上数据。
+```
+
+缺少最小定位实体时，Compass 会先追问，不会直接查：
+
+- C 端充电：`user_id / 手机号 / 订单号` 三选一 + 时间范围。
+- 支付/财务：`支付单号 / 订单号 / 用户ID` 三选一 + 时间范围。
+- B 端后台：页面/功能 + 操作对象 + 时间范围。
+- 日志异常：服务名 + 时间范围 + 异常现象，最好有 `traceId` 或 `tlogId`。
+
+## 推荐排查流程
+
+普通用户只需要自然语言触发 Skill；Agent 会负责调用 CLI Runtime。底层最小流程是：
 
 ```bash
 python3 -m compass_cli start "用户礼品卡不展示，手机号 15921195068，今天下午" --json
 python3 -m compass_cli confirm --mode auto --json
 python3 -m compass_cli next --json
-python3 -m compass_cli scene fact \
-  --category entrypoint \
-  --name app_payment_ways \
-  --value "/app/gun/payment-ways-v2" \
-  --source "SLS trace" \
-  --json
+```
+
+之后每一步都应该遵循：
+
+```text
+scene fact -> action plan -> action complete -> hypothesis add -> conclude -> report -> strategy keep/discard
+```
+
+对话中的确认方式：
+
+- 回复 `0` 或“开始/确认/可以”：进入自动模式，Agent 按证据链持续推进。
+- 回复 `M`：进入手动模式，每一步查询前都让你确认工具、轨道和查询范围。
+- 回复“停/等等/暂停”：中断当前排查，不继续调用 adapter。
+- 当 Agent 提示 SQL 风险、外部库、非 `all` logstore 或缺少关键实体时，需要你明确确认或补充信息。
+
+关键命令：
+
+```bash
+python3 -m compass_cli scene fact --category entrypoint --name app_payment_ways --value "/app/gun/payment-ways-v2" --source "用户描述/SLS trace" --json
+
 python3 -m compass_cli action plan \
   --action-id A1 \
   --track sls \
@@ -63,64 +271,30 @@ python3 -m compass_cli action plan \
   --gate "status=passed" \
   --gate "keyword_source=code" \
   --json
+
 python3 -m compass_cli action complete \
   --action-id A1 \
-  --summary "财务返回礼品卡，guan-zhong 最终响应无礼品卡" \
-  --elapsed-ms 1200 \
-  --finding "finance returned subPayWay=3 amount=2319.01" \
-  --finding "payment-ways-v2 response removed gift card" \
-  --lead trace_ids=trace-1 \
-  --lead interfaces=/app/gun/payment-ways-v2 \
+  --summary "财务返回礼品卡，最终响应无礼品卡" \
+  --finding "finance returned subPayWay=3" \
   --supports H2 \
   --json
-python3 -m compass_cli scene fact \
-  --category variant \
-  --name detail_vs_payment_ways \
-  --value "detail has tradeModes, payment-ways-v2 missing tradeModes" \
-  --source "SLS/code" \
-  --evidence E1 \
-  --json
-python3 -m compass_cli hypothesis add \
-  --id H4 \
-  --statement "入口链路上下文不一致导致礼品卡被误过滤" \
-  --source-fact detail_vs_payment_ways \
-  --source-evidence E1 \
-  --json
-python3 -m compass_cli conclude \
-  --conclusion "礼品卡在 guan-zhong payment-ways-v2 链路被过滤" \
-  --evidence E1 \
-  --confidence high \
-  --what "用户切换支付方式后礼品卡不展示" \
-  --where "guan-zhong /app/gun/payment-ways-v2" \
-  --when "2026-04-25 16:51 前后" \
-  --why-technical "payment-ways-v2 链路未填充 tradeModes，互联站过滤逻辑误过滤礼品卡" \
-  --why-business "用户在国网互联站 App 端切换支付方式" \
-  --blast-radius "已知影响该用户在该站 App 切换支付方式场景" \
-  --how "App 切换支付方式 -> guan-zhong 查询站点基础信息 -> tradeModes 为空 -> 过滤礼品卡" \
-  --inference-chain "财务返回礼品卡 -> guan-zhong 最终响应无礼品卡 -> 代码过滤点依赖 tradeModes -> 定位为 guan-zhong 过滤" \
-  --json
+
 python3 -m compass_cli report --audience technical
 python3 -m compass_cli report --audience business
 python3 -m compass_cli report --audience review
 ```
 
-门禁规则：
+## 安全规则
 
-- 默认使用线上环境 `prod` 排查；只有用户明确指定 test/uat/测试/预发时才切换环境。
-- Agent 使用罗盘排查时必须完整遵循 CLI Runtime 流程，不得直接查询后再补状态。
-- 罗盘只用于问题查询、定位和证据链分析；不会修改业务代码、生成补丁、提交代码或执行修复。
-- `start` 之后默认处于 `awaiting_confirmation`，未确认前禁止记录查询动作。
-- `scene fact` 用来先展开入口、对象、上下游、配置、差异等事实；没有场景事实时禁止 `conclude`。
-- `hypothesis add` 必须引用至少一个已存在的 scene fact 或 evidence，用来从事实和证据派生新假设，避免被首轮初始假设锁死。
-- 推荐使用 `action plan -> action complete`：先写清楚目标、输入、成功标准和门禁，再把执行结果完成为 evidence。
-- SLS 查询必须有高区分度实体锚点 `anchor`，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名；禁止用“异常/失败/余额不足/支付/订单”等泛词作为主查询。
-- SLS 查询在 `anchor` 外追加关键词时，必须通过 `keyword_source` 声明来源，且来源只能是代码常量/日志模板或 SQL 表字段/表结构；不得使用 Agent 自己猜出的场景词。
-- `action record` 保留为兼容入口，会直接生成 evidence，写入 action history，并把 trace/interface/method/table 等线索写入 evidence graph；`action-id` 必须唯一，避免同一编号承载两次不同查询。
-- `evidence add` 会补充人工证据并进入 action history，但只能在未结论阶段使用。
-- evidence 支持 `kind / strength / raw-ref`，用于区分用户口述、日志、SQL、代码、KB 和推断类证据的质量。
-- `concluded` 阶段禁止继续追加 action 或 evidence；如有新信息，使用 `reopen --reason ...` 归档旧结论并进入新 revision。
-- `conclude` 必须引用已存在的 evidence id，并填写高信息量的 What/Where/When/Why/Blast Radius/How/推断链，否则直接失败。
-- `report` 由程序按 `technical`、`business` 或 `review` 视角生成报告，并对展示内容脱敏；`review` 适合按“时间、角色、位置、动作、结果”输出更容易同步的排查结果。
+- 默认使用 `prod` 排查；只有用户明确指定 `test/uat/测试/预发` 才切换环境。
+- 首轮只做问题结构化和方案确认，未确认前禁止调用 adapter。
+- Compass 只用于查询、定位和证据链分析，不修改业务代码、不提交代码、不执行修复。
+- 禁止任何写操作，例如 `INSERT / UPDATE / DELETE / DROP / SET / DEL`。
+- 所有展示给用户的查询结果必须脱敏。
+- prod SQL 必须先 `EXPLAIN`，中高风险必须等待用户确认。
+- SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认。
+- SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
+- SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
 
 Track 门禁：
 
@@ -132,64 +306,67 @@ Track 门禁：
 | kb | `query` | `type` |
 | manual | 无 | 无 |
 
-Evidence 质量字段：
+## 常用命令
 
-| 字段 | 可选值 | 说明 |
-|------|--------|------|
-| kind | `manual`, `user`, `log`, `sql`, `code`, `kb`, `inference` | 证据类型 |
-| strength | `weak`, `medium`, `strong` | 证据强度 |
-| raw-ref | 任意字符串 | traceId、SQL 文件、代码位置、知识库路径等原始引用 |
+```bash
+# 检查配置
+python3 -m compass_cli setup-check --json
 
-## Obsidian 接入方式
+# 结构化一个问题，不实际查询
+python3 -m compass_cli intake "订单 123456 支付成功但状态未推进，今天上午" --json
 
-第一版直接读取 Obsidian vault 的 Markdown 文件目录，不需要插件，也不需要同步数据库。
+# 搜索本地知识库
+python3 -m compass_cli kb search "清分单 入金通知" --json
 
-方式一：命令行指定 vault 路径。
+# 查看当前状态
+python3 -m compass_cli state show --json
+
+# 生成报告
+python3 -m compass_cli report --audience technical
+```
+
+## Obsidian 知识库
+
+如果你有 Obsidian 或 Markdown 笔记，可以直接搜索：
 
 ```bash
 python3 -m compass_cli kb search "入金通知" --root "/Users/you/Obsidian/工作笔记" --json
 ```
 
-方式二：通过环境变量设置默认 vault。
+也可以在环境变量里配置默认路径：
 
 ```bash
 export COMPASS_OBSIDIAN_ROOT="/Users/you/Obsidian/工作笔记"
 python3 -m compass_cli kb search "清分单" --json
 ```
 
-这和指定代码库路径类似，只是搜索对象从代码文件变成 Markdown 笔记。
+## 故障排查
 
-## CLI 和 MCP 的关系
+`setup-check` 提示 `CODE_ROOT` 不存在：
 
-CLI 是第一优先级，因为几乎所有 Coding Agent 都能运行本地命令。
+- 检查 `.env` 里的 `CODE_ROOT` 是否是本机真实路径。
+- 如果项目在多层目录下，补充 `config/code-repos.yaml`。
 
-MCP 是后续增强入口，适合支持 MCP 的 Agent。未来结构应保持：
+SLS 不可用：
 
-```text
-compass_cli -> compass_core
-compass_mcp -> compass_core
-```
+- 检查至少存在一个完整 `SLS[index].*` profile。
+- 检查 `SLS[index].PROJECT`、`SLS[index].ACCESS_KEY_ID`、`SLS[index].ACCESS_KEY_SECRET` 是否填写。
+- 默认 `SLS[index].LOGSTORE=all`，换其他 logstore 前需要用户确认。
 
-也就是说，CLI 和 MCP 是并列入口，底层复用同一套 Core 和 Adapter。
+项目扫描找不到服务：
 
-## 当前已实现的最小能力
+- 先确认服务目录真实存在。
+- 在 `config/code-repos.yaml` 里显式配置项目名到相对路径。
+- 项目名建议和排查时常用服务名保持一致，例如 `finance_server`、`omp-shop`。
 
-- `setup-check`：检查本地配置和 Adapter 凭证缺失情况
-- `intake`：把自然语言问题结构化为场景、实体、缺失项、初始假设
-- `start / confirm / next`：创建受控排查会话，并由 CLI 管理状态推进
-- `action plan / complete`：先规划动作，再完成动作并生成 evidence
-- `action record`：兼容式事后登记，把已执行动作登记为证据，并沉淀 trace/interface/method/table 等线索
-- `evidence add`：补充人工证据
-- `reopen`：重开 concluded 会话，归档旧结论并进入新 revision
-- `scene fact`：沉淀入口、对象、上下游、配置、差异等场景事实
-- `hypothesis add`：从 scene fact 或 evidence 派生待验证假设
-- `conclude`：输出必须引用 evidence、scene fact 和结构化细节的结论
-- `kb search`：搜索本地 Markdown 知识库和 Obsidian vault
-- `state show`：读取或初始化本地排查状态
-- `report`：从状态文件生成 Markdown 或 JSON 报告，包含完整排查流程并对敏感展示值脱敏
+报告没有结论：
+
+- 确认是否已经有 `scene fact`、`evidence` 和 `conclude`。
+- `conclude` 必须引用真实存在的 evidence id。
+- 如果结论后有新信息，使用 `reopen --reason ...` 进入新 revision。
 
 ## 验证
 
 ```bash
-python3 -m pytest tests/test_compass_cli.py
+python3 -m pytest tests/test_compass_cli.py tests/test_sls_client.py
 ```

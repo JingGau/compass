@@ -52,39 +52,92 @@ class SLSClient(BaseAdapter):
     """SLS 日志查询客户端，封装 aliyun-log-python-sdk。"""
 
     ADAPTER_NAME = "sls"
-    REQUIRED_CONFIG_KEYS = ["endpoint", "access_key_id", "access_key_secret", "projects"]
+    REQUIRED_CONFIG_KEYS = ["profiles"]
 
     def __init__(self, config_path: Optional[str] = None):
         super().__init__(config_path, caller_file=__file__)
         self._clients: dict = {}
+        self._profiles_by_env = {
+            str(profile.get("env", "")).strip(): profile
+            for profile in self._cfg.get("profiles", [])
+            if profile.get("env")
+        }
+        if not self._cfg.get("default_profile") and self._cfg.get("profiles"):
+            self._cfg["default_profile"] = self._cfg["profiles"][0].get("name")
+
+    def _default_env(self) -> str:
+        configured = str(self._cfg.get("default_env") or "").strip()
+        if configured:
+            return configured
+        profiles = self._cfg.get("profiles", [])
+        if profiles:
+            return str(profiles[0].get("env") or "prod")
+        return "prod"
+
+    def _get_profile(self, env: Optional[str] = None) -> dict:
+        selected_env = env or self._default_env()
+        profile = self._profiles_by_env.get(selected_env)
+        if not profile:
+            available = sorted(k for k in self._profiles_by_env if k)
+            raise ValueError(f"环境 '{selected_env}' 未配置 SLS profile，可用: {available}")
+        return profile
 
     def _get_client(self, env: Optional[str] = None):
         """获取或创建指定环境的 SLS client（懒加载）。"""
         from aliyun.log import LogClient
-        env = env or self._cfg.get("default_env", "prod")
+        env = env or self._default_env()
+        profile = self._get_profile(env)
         if env not in self._clients:
             self._clients[env] = LogClient(
-                self._cfg["endpoint"],
-                self._cfg["access_key_id"],
-                self._cfg["access_key_secret"],
+                profile["endpoint"],
+                profile["access_key_id"],
+                profile["access_key_secret"],
             )
         return self._clients[env], env
 
     def _get_project(self, env: str) -> str:
-        projects = self._cfg.get("projects", {})
-        project = projects.get(env)
+        profile = self._get_profile(env)
+        project = profile.get("project")
         if not project:
-            raise ValueError(f"环境 '{env}' 未配置 SLS project，可用: {list(projects.keys())}")
+            raise ValueError(f"环境 '{env}' 未配置 SLS project")
         return project
+
+    def _get_logstore(self, env: str, logstore: Optional[str] = None) -> str:
+        profile = self._get_profile(env)
+        return str(logstore or profile.get("logstore") or "all")
+
+    def _check_logstore_confirmation(self, env: Optional[str], logstore: Optional[str], confirmed: bool = False) -> Optional[dict]:
+        """非默认 logstore 会改变查询范围，必须先让用户确认。"""
+        selected_env = env or self._default_env()
+        default_logstore = self._get_logstore(selected_env).strip()
+        requested_logstore = str(logstore or default_logstore).strip() or default_logstore
+        if requested_logstore == "all" or confirmed:
+            return None
+        return {
+            "success": False,
+            "data": None,
+            "error": "SLS 非默认 logstore 查询需要用户确认",
+            "requires_confirmation": True,
+            "confirmation": {
+                "gate_type": "sls_logstore",
+                "default_logstore": "all",
+                "requested_logstore": requested_logstore,
+                "required_reply": "确认使用该 logstore",
+                "message": (
+                    "默认仅使用 SLS_LOGSTORE=all。"
+                    f"当前请求使用 logstore={requested_logstore}，请用户确认后再执行。"
+                ),
+            },
+        }
 
     def health_check(self) -> dict:
         """验证连通性：列出 default_env 对应 project 的 logstore，返回标准结构。"""
         if not self._enabled:
-            return self._health_payload(status="disabled", environment=self._cfg.get("default_env", "prod"))
+            return self._health_payload(status="disabled", environment=self._default_env())
         try:
             start = time.perf_counter()
             from aliyun.log import ListLogstoresRequest
-            default_env = self._cfg.get("default_env", "prod")
+            default_env = self._default_env()
             client, env = self._get_client(default_env)
             project = self._get_project(default_env)
             req = ListLogstoresRequest(project)
@@ -92,7 +145,7 @@ class SLSClient(BaseAdapter):
             elapsed = int((time.perf_counter() - start) * 1000)
             return self._health_payload(status="ok", latency_ms=elapsed, environment=env)
         except Exception as e:
-            return self._health_payload(status="error", environment=self._cfg.get("default_env", "prod"), error=str(e))
+            return self._health_payload(status="error", environment=self._default_env(), error=str(e))
 
     def list_logstores(self, env: Optional[str] = None) -> dict:
         """列出指定环境的所有 logstore。"""
@@ -118,6 +171,7 @@ class SLSClient(BaseAdapter):
         limit: int = 20,
         offset: int = 0,
         logstore: Optional[str] = None,
+        logstore_confirmed: bool = False,
     ) -> dict:
         """
         执行 SLS 查询语句。
@@ -128,11 +182,14 @@ class SLSClient(BaseAdapter):
         blocked = self._check_enabled()
         if blocked:
             return blocked
+        logstore_blocked = self._check_logstore_confirmation(env, logstore, logstore_confirmed)
+        if logstore_blocked:
+            return logstore_blocked
         try:
             from aliyun.log import GetLogsRequest
             client, env = self._get_client(env)
             project = self._get_project(env)
-            ls = logstore or self._cfg.get("logstore", "all")
+            ls = self._get_logstore(env, logstore)
             from_ts = _parse_time(from_time)
             to_ts = _parse_time(to_time)
             req = GetLogsRequest(

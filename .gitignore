@@ -1,5 +1,6 @@
 # 敏感配置（环境变量实际值）
 .env
+.env.backup.*
 
 # 用户个人代码仓库路径映射
 config/code-repos.yaml

@@ -1,12 +1,3 @@
 enabled: true
-
-base_url: "http://10.20.0.2:8081"
-
-auth:
-  header_user: "X-User-Name"
-  header_pass: "X-Password"
-  username: "${PLATFORM_USERNAME}"
-  password: "${PLATFORM_PASSWORD}"
-
-timeout: 30
-export_timeout: 120
+profiles_from_env: "PLATFORM"
+default_profile: "${PLATFORM_DEFAULT_PROFILE}"
