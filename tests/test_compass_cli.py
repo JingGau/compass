@@ -157,6 +157,14 @@ def test_sql_action_plan_defaults_to_session_environment_prod(tmp_path: Path) ->
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
 
+    explain_low = (
+        "0:VOlapScanNode(204)\n"
+        "TABLE: t_pay\n"
+        "PREDICATES: ((phone = '15921195068'))\n"
+        "partitions=1/1\n"
+        "tablets=1/1\n"
+        "cardinality=1200, avgRowSize=0.0, numNodes=1\n"
+    )
     planned = run_cli(
         "action",
         "plan",
@@ -174,18 +182,20 @@ def test_sql_action_plan_defaults_to_session_environment_prod(tmp_path: Path) ->
         "查询到该用户支付方式记录",
         "--input",
         "sql=select * from t_pay where phone='15921195068'",
+        "--input",
+        f"explain_text={explain_low}",
         "--gate",
         "type=sql",
-        "--gate",
-        "explain=passed",
-        "--gate",
-        "risk=low",
         "--json",
     )
 
     assert planned.returncode == 0, planned.stderr
     payload = json.loads(planned.stdout)
     assert payload["action"]["input"]["env"] == "prod"
+    assert payload["action"]["status"] == "planned"
+    assert payload["action"]["gate"]["status"] == "passed"
+    assert payload["action"]["gate"]["risk"] == "low"
+    assert payload["action"]["gate"]["assessor"] == "compass.sql_gate.assess_sql_explain"
 
 
 def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -> None:
@@ -1276,7 +1286,7 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
     )
 
     assert sql_missing_explain.returncode == 1
-    assert "track sql 缺少 gate 字段：explain" in json.loads(sql_missing_explain.stdout)["error"]
+    assert "input.explain_text" in json.loads(sql_missing_explain.stdout)["error"]
 
 
 def test_action_plan_accepts_valid_track_specific_fields(tmp_path: Path) -> None:
@@ -2034,10 +2044,13 @@ def test_state_show_migrates_legacy_state_schema(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     state = payload["state"]
-    assert state["schema_version"] == 1
+    assert state["schema_version"] == 2
     assert state["scene_facts"] == []
     assert state["action_history"] == []
     assert state["evidence_graph"] == {"nodes": [], "edges": []}
+    assert state["applicable_knowledge"] == []
+    assert state["changes"] == []
+    assert state["pending_confirmations"] == []
 
 
 def test_state_show_writes_migrated_schema_back_to_file(tmp_path: Path) -> None:
@@ -2058,7 +2071,7 @@ def test_state_show_writes_migrated_schema_back_to_file(tmp_path: Path) -> None:
 
     assert result.returncode == 0, result.stderr
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
-    assert persisted["schema_version"] == 1
+    assert persisted["schema_version"] == 2
     assert persisted["scene_facts"] == []
     assert persisted["action_history"] == []
     assert persisted["evidence_graph"] == {"nodes": [], "edges": []}
@@ -2089,7 +2102,7 @@ def test_report_json_includes_rendered_report_for_audience(tmp_path: Path) -> No
     assert payload["ok"] is True
     assert payload["audience"] == "technical"
     assert "## 场景事实" in payload["report"]
-    assert payload["state"]["schema_version"] == 1
+    assert payload["state"]["schema_version"] == 2
 
 
 def test_reopen_supersedes_conclusion_and_allows_new_evidence(tmp_path: Path) -> None:
@@ -2260,3 +2273,663 @@ def test_evidence_rejects_unknown_quality_values(tmp_path: Path) -> None:
     )
     assert bad_strength.returncode == 1
     assert "未知 evidence strength" in json.loads(bad_strength.stdout)["error"]
+
+
+_EXPLAIN_LOW_RISK = (
+    "0:VOlapScanNode(204)\n"
+    "TABLE: t_pay\n"
+    "PREDICATES: ((phone = '15921195068'))\n"
+    "partitions=1/1\n"
+    "tablets=1/1\n"
+    "cardinality=1200, avgRowSize=0.0, numNodes=1\n"
+)
+
+_EXPLAIN_HIGH_RISK = (
+    "0:VOlapScanNode(211)\n"
+    "TABLE: ods_finance_cdc.ods_finance_d_t_third_pay_info\n"
+    "PREDICATES: ((flow_number = '20260413234173136502786'))\n"
+    "partitions=1/69 (p202604)\n"
+    "tablets=3/3\n"
+    "cardinality=2470577, avgRowSize=0.0, numNodes=1\n"
+)
+
+
+def _start_sql_session(tmp_path: Path) -> Path:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    return state_file
+
+
+def test_sql_plan_blocks_high_risk_until_action_confirm(tmp_path: Path) -> None:
+    state_file = _start_sql_session(tmp_path)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLH",
+        "--track",
+        "sql",
+        "--source",
+        "Doris",
+        "--objective",
+        "查询三方支付明细",
+        "--success-criteria",
+        "拿到第三方流水",
+        "--input",
+        "sql=select * from ods_finance_cdc.ods_finance_d_t_third_pay_info where flow_number='20260413234173136502786'",
+        "--input",
+        "env=prod",
+        "--input",
+        f"explain_text={_EXPLAIN_HIGH_RISK}",
+        "--gate",
+        "type=sql",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    payload = json.loads(planned.stdout)
+    assert payload["action"]["status"] == "requires_confirmation"
+    assert payload["action"]["gate"]["risk"] == "high"
+    assert payload["action"]["gate"]["status"] == "blocked"
+    pendings = payload["state"].get("pending_confirmations") or []
+    assert any(item.get("action_id") == "SQLH" for item in pendings)
+
+    blocked_complete = run_cli(
+        "action",
+        "complete",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLH",
+        "--summary",
+        "查询结果",
+        "--json",
+    )
+    assert blocked_complete.returncode == 1
+    assert "requires_confirmation" in json.loads(blocked_complete.stdout)["error"] or "待确认" in json.loads(blocked_complete.stdout)["error"]
+
+    confirmed = run_cli(
+        "action",
+        "confirm",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLH",
+        "--note",
+        "已与 DBA 评估，分区已限定",
+        "--json",
+    )
+    assert confirmed.returncode == 0, confirmed.stderr
+    confirmed_payload = json.loads(confirmed.stdout)
+    assert confirmed_payload["action"]["status"] == "planned"
+    assert not confirmed_payload["state"].get("pending_confirmations")
+
+    completed = run_cli(
+        "action",
+        "complete",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLH",
+        "--summary",
+        "三方支付明细已查到",
+        "--json",
+    )
+    assert completed.returncode == 0, completed.stderr
+
+
+def test_sql_plan_passes_low_risk_without_confirmation(tmp_path: Path) -> None:
+    state_file = _start_sql_session(tmp_path)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLL",
+        "--track",
+        "sql",
+        "--source",
+        "Doris",
+        "--objective",
+        "查询单条支付记录",
+        "--success-criteria",
+        "命中订单",
+        "--input",
+        "sql=select * from t_pay where phone='15921195068'",
+        "--input",
+        "env=prod",
+        "--input",
+        f"explain_text={_EXPLAIN_LOW_RISK}",
+        "--gate",
+        "type=sql",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    payload = json.loads(planned.stdout)
+    assert payload["action"]["status"] == "planned"
+    assert payload["action"]["gate"]["status"] == "passed"
+    assert payload["action"]["gate"]["risk"] == "low"
+    assert payload["action"]["gate"]["rows"] == "1200"
+    assert not payload["state"].get("pending_confirmations")
+
+
+def test_sql_plan_skips_explain_in_test_environment(tmp_path: Path) -> None:
+    state_file = _start_sql_session(tmp_path)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLT",
+        "--track",
+        "sql",
+        "--source",
+        "MySQL",
+        "--objective",
+        "uat 环境校验表结构",
+        "--success-criteria",
+        "拿到字段定义",
+        "--input",
+        "sql=select 1 from t_pay limit 1",
+        "--input",
+        "env=uat",
+        "--gate",
+        "type=sql",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    payload = json.loads(planned.stdout)
+    assert payload["action"]["status"] == "planned"
+    assert payload["action"]["gate"]["risk"] == "low"
+    assert payload["action"]["input"]["env"] == "uat"
+
+
+def test_action_confirm_rejects_when_no_pending_risk(tmp_path: Path) -> None:
+    state_file = _start_sql_session(tmp_path)
+
+    run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLOK",
+        "--track",
+        "sql",
+        "--source",
+        "Doris",
+        "--objective",
+        "低风险查询",
+        "--success-criteria",
+        "命中目标",
+        "--input",
+        "sql=select * from t_pay where phone='15921195068'",
+        "--input",
+        "env=prod",
+        "--input",
+        f"explain_text={_EXPLAIN_LOW_RISK}",
+        "--gate",
+        "type=sql",
+    )
+
+    bogus = run_cli(
+        "action",
+        "confirm",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SQLOK",
+        "--note",
+        "尝试无脑解锁",
+        "--json",
+    )
+    assert bogus.returncode == 1
+    assert "没有待确认" in json.loads(bogus.stdout)["error"]
+
+
+# ============================================================================
+# 以下测试覆盖 v4 新增能力：KB Learn / Change / Timeline / 反思警告 / Falsifiable / mitigation 拆分
+# ============================================================================
+
+
+def test_kb_learn_persists_and_suggest_recalls_top_n(tmp_path: Path) -> None:
+    """录入若干条知识后，suggest 能按相关度返回 top-N。"""
+
+    kb_file = tmp_path / "kb.yaml"
+    run_cli(
+        "kb",
+        "learn",
+        "--statement",
+        "C 端订单号是 19 位数字，前 14 位为 yyyyMMddHHmmss",
+        "--tag",
+        "order",
+        "--tag",
+        "id-rule",
+        "--knowledge-file",
+        str(kb_file),
+    )
+    run_cli(
+        "kb",
+        "learn",
+        "--statement",
+        "OR 开头的短订单号是 B 端 mock 数据",
+        "--tag",
+        "order",
+        "--tag",
+        "mock",
+        "--knowledge-file",
+        str(kb_file),
+    )
+    result = run_cli(
+        "kb",
+        "suggest",
+        "--query",
+        "用户订单号 19 位",
+        "--top",
+        "5",
+        "--knowledge-file",
+        str(kb_file),
+        "--json",
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    matches = payload["matches"]
+    assert len(matches) >= 1
+    assert matches[0]["id"] == "K001"
+    assert matches[0]["score"] > matches[-1]["score"] - 1e-6
+
+
+def test_kb_learn_rejects_overlong_statement(tmp_path: Path) -> None:
+    kb_file = tmp_path / "kb.yaml"
+    long_statement = "占位" * 200
+    result = run_cli(
+        "kb",
+        "learn",
+        "--statement",
+        long_statement,
+        "--knowledge-file",
+        str(kb_file),
+        "--json",
+    )
+    assert result.returncode == 1
+    assert "超过上限" in json.loads(result.stdout)["error"]
+
+
+def test_change_record_then_list_round_trip(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户 15921195068 礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    record = run_cli(
+        "change",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--type",
+        "deploy",
+        "--target",
+        "order-server@v1.2.3",
+        "--description",
+        "上线 v1.2.3，含 SQL DDL",
+        "--event-at",
+        "2026-04-29 13:30",
+        "--source",
+        "jenkins-#1234",
+        "--json",
+    )
+    assert record.returncode == 0, record.stderr
+    payload = json.loads(record.stdout)
+    assert payload["change"]["id"] == "C1"
+    assert payload["change"]["change_type"] == "deploy"
+
+    listed = run_cli("change", "list", "--state-file", str(state_file), "--json")
+    assert listed.returncode == 0
+    listed_payload = json.loads(listed.stdout)
+    assert listed_payload["count"] == 1
+    assert listed_payload["changes"][0]["target"] == "order-server@v1.2.3"
+
+
+def test_change_record_rejects_unknown_type(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    result = run_cli(
+        "change",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--type",
+        "magic",
+        "--target",
+        "x",
+        "--description",
+        "y",
+        "--event-at",
+        "2026-04-29 13:30",
+        "--json",
+    )
+    assert result.returncode == 1
+    assert "未知 change_type" in json.loads(result.stdout)["error"]
+
+
+def test_timeline_orders_changes_and_facts_chronologically(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "user_complaint",
+        "--value",
+        "首次报障",
+        "--source",
+        "工单",
+        "--event-at",
+        "2026-04-29 14:00",
+    )
+    run_cli(
+        "change",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--type",
+        "deploy",
+        "--target",
+        "order-server@v1.2.3",
+        "--description",
+        "上线",
+        "--event-at",
+        "2026-04-29 13:30",
+    )
+    result = run_cli("timeline", "--state-file", str(state_file), "--json")
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    timeline = payload["timeline"]
+    assert len(timeline) == 2
+    assert timeline[0]["kind"] == "change"
+    assert timeline[1]["kind"] == "scene_fact"
+
+
+def test_scene_fact_diff_requires_comparison_keyword(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    bad = run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "diff",
+        "--name",
+        "balance_state",
+        "--value",
+        "balance is 0",
+        "--source",
+        "DB",
+        "--json",
+    )
+    assert bad.returncode == 1
+    assert "对比性" in json.loads(bad.stdout)["error"]
+
+    good = run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "diff",
+        "--name",
+        "balance_state",
+        "--value",
+        "故障时余额=0，正常时应为 100，差异为 -100",
+        "--source",
+        "DB",
+        "--json",
+    )
+    assert good.returncode == 0
+
+
+def test_hypothesis_falsifiable_field_persists(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "k",
+        "--value",
+        "v",
+        "--source",
+        "src",
+    )
+    result = run_cli(
+        "hypothesis",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--id",
+        "H1",
+        "--statement",
+        "缓存击穿导致余额展示为 0",
+        "--source-fact",
+        "k",
+        "--falsifiable",
+        "如果 Redis 在故障窗口期 TTL 未过期则该假设不成立",
+        "--json",
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    h = next(h for h in payload["state"]["hypotheses"] if h["id"] == "H1")
+    assert "falsifiable" in h
+    assert "TTL" in h["falsifiable"]
+
+
+def test_conclude_quality_warnings_for_high_confidence_without_strong_evidence(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "k",
+        "--value",
+        "v",
+        "--source",
+        "src",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "manual-note",
+        "--summary",
+        "凭经验觉得是缓存问题",
+        "--kind",
+        "manual",
+        "--strength",
+        "weak",
+    )
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "Redis 缓存导致余额展示为 0",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "high",
+        "--what",
+        "余额查询返回 0",
+        "--where",
+        "wallet-server WalletServiceImpl#getBalance 第3层调用",
+        "--when",
+        "2026-04-29 14:32 持续 3 分钟",
+        "--why-technical",
+        "Redis TTL 过期导致缓存击穿到 DB",
+        "--why-business",
+        "用户充值后立即刷新页面",
+        "--blast-radius",
+        "影响 1 人",
+        "--how",
+        "用户刷新 → Redis 过期 → DB 未更新 → 返回 0",
+        "--inference-chain",
+        "Redis 过期 → 余额为 0",
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout)
+    warnings = payload["state"]["conclusion"]["quality_warnings"]
+    codes = {w["code"] for w in warnings}
+    assert "CONF_GATE" in codes
+    assert "NO_MITIGATION" in codes
+    assert "NO_REMEDIATION" in codes
+
+
+def test_conclude_with_mitigation_and_remediation_persists(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "k",
+        "--value",
+        "v",
+        "--source",
+        "src",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "支付回调日志缺失",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+    )
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "支付回调消息丢失",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "high",
+        "--what",
+        "支付回调未推进订单",
+        "--where",
+        "order-server OrderCallbackServiceImpl#onPaySuccess 第4层",
+        "--when",
+        "2026-04-29 14:32 持续 3 分钟",
+        "--why-technical",
+        "MQ 消息丢失，消费方未收到",
+        "--why-business",
+        "用户充值后未到账",
+        "--blast-radius",
+        "影响 50 人",
+        "--how",
+        "支付成功 → MQ 发送丢失 → 订单状态未推进 → 用户未到账",
+        "--inference-chain",
+        "支付回调日志 E1 → 因 MQ 丢失 → 触发余额为 0",
+        "--mitigation",
+        "立即补发对账消息",
+        "--remediation",
+        "MQ 增加幂等并接入告警",
+        "--unsolved",
+        "为何同时段其他订单未受影响",
+        "--pattern-scan",
+        "充电订单同链路是否也丢消息",
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout)
+    conc = payload["state"]["conclusion"]
+    assert conc["mitigation"] == ["立即补发对账消息"]
+    assert conc["remediation"] == ["MQ 增加幂等并接入告警"]
+    assert conc["unsolved"] == ["为何同时段其他订单未受影响"]
+    assert conc["pattern_scan"] == ["充电订单同链路是否也丢消息"]
+    codes = {w["code"] for w in conc["quality_warnings"]}
+    assert "CONF_GATE" not in codes
+    assert "NO_MITIGATION" not in codes
+    assert "NO_REMEDIATION" not in codes
+
+
+def test_next_emits_reflection_questions_when_evidence_is_strong(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "k",
+        "--value",
+        "v",
+        "--source",
+        "src",
+    )
+    for idx in range(3):
+        run_cli(
+            "evidence",
+            "add",
+            "--state-file",
+            str(state_file),
+            "--source",
+            f"sls-{idx}",
+            "--summary",
+            f"日志条目 {idx}",
+            "--kind",
+            "log",
+            "--strength",
+            "strong",
+        )
+    res = run_cli("next", "--state-file", str(state_file), "--json")
+    assert res.returncode == 0, res.stderr
+    payload = json.loads(res.stdout)
+    next_info = payload["next"]
+    assert "反思" in next_info["message"]
+    assert len(next_info.get("reflection") or []) == 3

@@ -22,6 +22,9 @@ memory/audit-log.yaml
 memory/audit-archive/
 memory/session-state.yaml
 
+# 用户积累的通用知识库（KB Learn，排查中沉淀的"小颗粒事实/规则"）
+memory/knowledge.yaml
+
 # Python
 __pycache__/
 *.pyc

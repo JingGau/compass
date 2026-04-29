@@ -5,6 +5,7 @@ from typing import Any
 
 from compass_core.masking import mask_mapping, mask_text, mask_value
 from compass_core.state import read_state
+from compass_core.timeline import build_timeline
 
 
 def load_state(path: str | Path) -> dict[str, Any]:
@@ -53,6 +54,12 @@ def render_technical_report(state: dict[str, Any]) -> str:
             lines.append(
                 f"| {item.get('revision', '')} | {mask_text(item.get('status', ''))} | {mask_text(item.get('summary', ''))} | {mask_text(item.get('reopen_reason', ''))} |"
             )
+
+    lines.extend(_render_timeline_section(state))
+
+    lines.extend(_render_changes_section(state))
+
+    lines.extend(_render_applicable_knowledge_section(state))
 
     lines.extend(["", "## Entities"])
     entities = state.get("entities") or {}
@@ -147,6 +154,9 @@ def render_technical_report(state: dict[str, Any]) -> str:
 
     if conclusion:
         lines.extend(["", "## 推断链", "", mask_text(details.get("inference_chain", ""))])
+        lines.extend(_render_quality_warnings(conclusion))
+        lines.extend(_render_mitigation_remediation(conclusion))
+        lines.extend(_render_unsolved_pattern(conclusion))
 
     lines.extend(_render_strategy_review(state))
 
@@ -187,6 +197,8 @@ def render_business_report(state: dict[str, Any]) -> str:
             lines.append(f"- {mask_text(item.get('summary', ''))}")
     else:
         lines.append("- 暂无")
+
+    lines.extend(_render_mitigation_remediation(conclusion))
 
     lines.extend(["", "## 建议"])
     next_actions = conclusion.get("next_actions") or state.get("next_actions") or []
@@ -235,6 +247,8 @@ def render_review_report(state: dict[str, Any]) -> str:
             + " |"
         )
 
+    lines.extend(_render_changes_section(state))
+
     lines.extend(
         [
             "",
@@ -253,11 +267,14 @@ def render_review_report(state: dict[str, Any]) -> str:
             "## 影响范围",
             "",
             mask_text(details.get("blast_radius", "")),
-            "",
-            "## 后续建议",
-            "",
         ]
     )
+
+    lines.extend(_render_mitigation_remediation(conclusion))
+    lines.extend(_render_unsolved_pattern(conclusion))
+    lines.extend(_render_quality_warnings(conclusion))
+
+    lines.extend(["", "## 后续建议", ""])
     next_actions = conclusion.get("next_actions") or []
     if next_actions:
         for item in next_actions:
@@ -431,4 +448,119 @@ def _render_action_flow(index: int, action: dict[str, Any]) -> list[str]:
             lines.append(f"    - {key}: {rendered_values}")
     if output.get("evidence_id"):
         lines.append(f"  - evidence_id: {output.get('evidence_id')}")
+    return lines
+
+
+def _render_timeline_section(state: dict[str, Any]) -> list[str]:
+    """渲染故障时间线（仅当有带 event_at 的事件时显示）。"""
+
+    entries = build_timeline(state)
+    if not entries:
+        return []
+    lines = ["", "## 故障时间线", "", "| 时间 | 类型 | 引用 | 标题 | 详情 |", "|------|------|------|------|------|"]
+    for entry in entries:
+        ts = mask_text(str(entry.get("ts", "")))
+        kind = mask_text(str(entry.get("kind", "")))
+        ref = mask_text(str(entry.get("ref_id", "")))
+        title = mask_text(str(entry.get("title", "")))
+        detail = mask_text(str(entry.get("detail", "")))
+        lines.append(f"| {ts} | {kind} | {ref} | {title} | {detail} |")
+    return lines
+
+
+def _render_changes_section(state: dict[str, Any]) -> list[str]:
+    """渲染变更窗口（仅当登记了变更时显示）。"""
+
+    changes = state.get("changes") or []
+    if not changes:
+        return []
+    lines = ["", "## 变更窗口", "", "| ID | 类型 | 时间 | 对象 | 描述 | Before → After | 来源 |", "|----|------|------|------|------|----------------|------|"]
+    for change in changes:
+        before = str(change.get("before", "")).strip()
+        after = str(change.get("after", "")).strip()
+        delta = "—"
+        if before or after:
+            before_text = mask_text(before) or "—"
+            after_text = mask_text(after) or "—"
+            delta = f"{before_text} → {after_text}"
+        lines.append(
+            "| {cid} | {ctype} | {when} | {target} | {desc} | {delta} | {source} |".format(
+                cid=mask_text(str(change.get("id", ""))),
+                ctype=mask_text(str(change.get("change_type", ""))),
+                when=mask_text(str(change.get("event_at", ""))),
+                target=mask_text(str(change.get("target", ""))),
+                desc=mask_text(str(change.get("description", ""))),
+                delta=delta,
+                source=mask_text(str(change.get("source", ""))),
+            )
+        )
+    return lines
+
+
+def _render_applicable_knowledge_section(state: dict[str, Any]) -> list[str]:
+    """渲染本次召回到的通用知识。"""
+
+    items = state.get("applicable_knowledge") or []
+    if not items:
+        return []
+    lines = ["", "## 适用知识（自动召回）", ""]
+    for item in items:
+        tags = ",".join(item.get("tags") or [])
+        kid = mask_text(str(item.get("id", "")))
+        statement = mask_text(str(item.get("statement", "")))
+        tags_text = mask_text(tags)
+        lines.append(f"- **[{kid}][{tags_text}]** {statement}")
+    return lines
+
+
+def _render_quality_warnings(conclusion: dict[str, Any]) -> list[str]:
+    """渲染结论质量警告（仅 conclusion 存在 quality_warnings 时显示）。"""
+
+    warnings = conclusion.get("quality_warnings") or []
+    if not warnings:
+        return []
+    lines = ["", "## 结论质量提示", "", "| 等级 | 代号 | 提示 |", "|------|------|------|"]
+    for w in warnings:
+        level = mask_text(str(w.get("level", "warn")).upper())
+        code = mask_text(str(w.get("code", "")))
+        msg = mask_text(str(w.get("message", "")))
+        lines.append(f"| {level} | {code} | {msg} |")
+    return lines
+
+
+def _render_mitigation_remediation(conclusion: dict[str, Any]) -> list[str]:
+    """渲染止血与根治拆分。"""
+
+    mitigation = conclusion.get("mitigation") or []
+    remediation = conclusion.get("remediation") or []
+    if not mitigation and not remediation:
+        return []
+    lines = ["", "## 止血与根治"]
+    if mitigation:
+        lines.extend(["", "### 止血动作（短期降低影响）"])
+        for item in mitigation:
+            lines.append(f"- {mask_text(str(item))}")
+    if remediation:
+        lines.extend(["", "### 根治动作（长期解决根因）"])
+        for item in remediation:
+            lines.append(f"- {mask_text(str(item))}")
+    return lines
+
+
+def _render_unsolved_pattern(conclusion: dict[str, Any]) -> list[str]:
+    """渲染未解之谜与同类扫描方向。"""
+
+    unsolved = conclusion.get("unsolved") or []
+    pattern_scan = conclusion.get("pattern_scan") or []
+    if not unsolved and not pattern_scan:
+        return []
+    lines: list[str] = []
+    if unsolved:
+        lines.extend(["", "## 未解之谜（保留为开放问题）"])
+        for item in unsolved:
+            lines.append(f"- {mask_text(str(item))}")
+    if pattern_scan:
+        lines.extend(["", "## 同类扫描方向"])
+        for item in pattern_scan:
+            lines.append(f"- {mask_text(str(item))}")
     return lines

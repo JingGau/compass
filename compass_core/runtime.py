@@ -7,8 +7,9 @@ from typing import Any
 
 from compass_core.intake import intake_problem
 from compass_core.state import default_state, now_iso, read_or_init_state, write_state
-from tools.action_cards import ActionResult
+from tools.action_cards import ActionResult, SafetyGateResult
 from tools.evidence_graph import EvidenceGraph
+from tools.sql_gate import assess_sql_explain
 
 
 class CompassRuntimeError(ValueError):
@@ -33,7 +34,7 @@ TRACK_REQUIREMENTS: dict[str, dict[str, tuple[str, ...]]] = {
     },
     "sql": {
         "input": ("sql", "env"),
-        "gate": ("type", "explain", "risk"),
+        "gate": ("type",),
     },
     "code": {
         "input": ("repo", "target"),
@@ -94,6 +95,7 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
     state["scene_facts"] = []
     state["next_actions"] = intake.next_actions
     state["evidence_graph"] = {"nodes": [], "edges": []}
+    state["applicable_knowledge"] = _recall_applicable_knowledge(intake, top_n=5)
     state["flow"].update(
         {
             "phase": "awaiting_confirmation",
@@ -104,6 +106,110 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
     )
     write_state(path, state)
     return state
+
+
+def _maybe_reflection_questions(state: dict[str, Any]) -> dict[str, Any] | None:
+    """当证据/假设具备一定深度时，输出"根因反思三问"。
+
+    触发条件（满足任一即提示）：
+        - 证据数 ≥ 3 且 至少 1 条 strong/medium 级别证据；
+        - 至少 1 个 status=支持 的假设；
+        - 已登记变更（state.changes 非空）。
+
+    若三问已展示过（state.flow.reflection_shown），则不重复打扰。
+    """
+
+    flow = state.get("flow") or {}
+    if flow.get("reflection_shown"):
+        return None
+    evidence = state.get("evidence") or []
+    if not evidence:
+        return None
+
+    strong_count = sum(
+        1
+        for e in evidence
+        if str(e.get("kind", "")).lower() in _STRONG_KINDS
+        and str(e.get("strength", "")).lower() in _STRONG_STRENGTHS
+    )
+    hypotheses = state.get("hypotheses") or []
+    supported = [
+        h
+        for h in hypotheses
+        if str(h.get("status", "")).lower() in {"支持", "supported"}
+    ]
+    has_changes = bool(state.get("changes"))
+
+    trigger = (len(evidence) >= 3 and strong_count >= 1) or supported or has_changes
+    if not trigger:
+        return None
+
+    questions = [
+        "1) 这是【现象】还是【根因】？把当前结论再问一次 'why'，能不能继续往下挖？",
+        "2) 为什么【之前】没出问题、【现在】才出？把'变化点'（变更/数据/流量/上游）跟故障窗口对齐。",
+        "3) 同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？",
+    ]
+    state["flow"]["reflection_shown"] = True
+    path = state.get("__path__")
+    if path:
+        snapshot = {k: v for k, v in state.items() if k != "__path__"}
+        write_state(path, snapshot)
+    return {
+        "phase": "evidence_collecting",
+        "blocked": False,
+        "message": (
+            "证据已具备一定深度，请先做【根因反思三问】，再决定是否输出 conclude：\n"
+            + "\n".join(questions)
+        ),
+        "reflection": questions,
+        "next_actions": [
+            "scene fact (category=baseline 或 diff，把'之前/正常'与'之后/异常'对比写下来)",
+            "change record (登记疑似引发本次问题的变更)",
+            "hypothesis add (把反思中浮现的新猜想登记)",
+            "conclude (若三问都过得去则可以输出结论)",
+        ],
+    }
+
+
+def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[str, Any]]:
+    """根据 intake 内容自动从 KB 召回最多 top_n 条相关通用知识。
+
+    召回失败（KB 不存在 / yaml 损坏）时返回空列表，不阻塞主流程。
+    """
+
+    try:
+        from .knowledge import suggest_knowledge, increment_hits  # 延迟导入，避免循环
+    except Exception:
+        return []
+
+    parts: list[str] = []
+    raw = getattr(intake, "raw_problem", "") or ""
+    standard = getattr(intake, "standard_problem", "") or ""
+    scene = getattr(intake, "scene", "") or ""
+    parts.append(str(raw))
+    parts.append(str(standard))
+    parts.append(str(scene))
+    entities = getattr(intake, "entities", {}) or {}
+    if isinstance(entities, dict):
+        for key, value in entities.items():
+            parts.append(str(key))
+            if isinstance(value, list):
+                parts.extend(str(v) for v in value)
+            else:
+                parts.append(str(value))
+    query = " ".join(p for p in parts if p)
+
+    try:
+        matches = suggest_knowledge(query, top_n=top_n)
+    except Exception:
+        return []
+    if not matches:
+        return []
+    try:
+        increment_hits([m.id for m in matches])
+    except Exception:
+        pass
+    return [m.to_dict() for m in matches]
 
 
 def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
@@ -126,6 +232,7 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
 
 def next_step(path: str | Path) -> dict[str, Any]:
     state = _load_state(path)
+    state["__path__"] = str(path)
     phase = _phase(state)
     if not state.get("flow", {}).get("confirmed"):
         return {
@@ -165,6 +272,9 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "已有证据，但还缺少场景事实。请先用 scene fact 记录入口、对象、上下游、配置或差异。",
                 "next_actions": ["scene fact", "action record"],
             }
+        reflection = _maybe_reflection_questions(state)
+        if reflection is not None:
+            return reflection
         return {
             "phase": phase,
             "blocked": False,
@@ -205,6 +315,7 @@ def record_action_result(
     kind: str | None = None,
     strength: str = "medium",
     raw_ref: str | None = None,
+    event_at: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -222,6 +333,7 @@ def record_action_result(
         kind=kind or _kind_from_track(track),
         strength=strength,
         raw_ref=raw_ref,
+        event_at=event_at,
     )
     state.setdefault("evidence", []).append(evidence)
     state.setdefault("action_history", []).append(
@@ -272,6 +384,9 @@ def plan_action(
         inputs["env"] = str(state.get("environment") or state.get("problem", {}).get("environment") or "prod")
     gates = gate or {}
     _validate_action_plan_fields(track, inputs, gates)
+    sql_gate_result: SafetyGateResult | None = None
+    if track.lower() == "sql":
+        sql_gate_result = _enforce_sql_explain_gate(inputs, gates)
     action = {
         "action_id": action_id,
         "track": track,
@@ -283,14 +398,63 @@ def plan_action(
         "status": "planned",
         "created_at": now_iso(),
     }
+    if sql_gate_result and sql_gate_result.requires_confirmation:
+        action["status"] = "requires_confirmation"
+        action["pending_confirmation"] = {
+            "gate_type": sql_gate_result.gate_type,
+            "risk_level": sql_gate_result.risk_level,
+            "summary": sql_gate_result.summary,
+            "details": dict(sql_gate_result.details),
+        }
+        state.setdefault("pending_confirmations", []).append(
+            {
+                "id": f"{action_id}:sql:{sql_gate_result.risk_level}",
+                "action_id": action_id,
+                "gate_type": sql_gate_result.gate_type,
+                "risk_level": sql_gate_result.risk_level,
+                "summary": sql_gate_result.summary,
+                "required_reply": "compass action confirm",
+                "created_at": now_iso(),
+            }
+        )
     state.setdefault("action_plan", []).append(action)
+    allowed = ["next", "action complete", "action plan", "scene fact", "hypothesis add", "evidence add", "state show"]
+    if action["status"] == "requires_confirmation":
+        allowed.append("action confirm")
     state["flow"].update(
         {
             "phase": "evidence_collecting",
             "current_step": "action_planning",
-            "allowed_commands": ["next", "action complete", "action plan", "scene fact", "hypothesis add", "evidence add", "state show"],
+            "allowed_commands": allowed,
         }
     )
+    _touch(state)
+    write_state(path, state)
+    return state, action
+
+
+def confirm_action(
+    path: str | Path,
+    *,
+    action_id: str,
+    note: str = "",
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    state = _load_state(path)
+    _require_confirmed(state)
+    _require_phase(state, {"action_ready", "evidence_collecting"}, "确认 action 风险")
+    action = _find_action_plan(state, action_id)
+    if action.get("status") != "requires_confirmation":
+        raise CompassRuntimeError(
+            f"action {action_id} 状态为 {action.get('status')}，没有待确认的风险门禁。"
+        )
+    action["status"] = "planned"
+    action["confirmed_at"] = now_iso()
+    if note:
+        action["confirmation_note"] = note
+    pending = state.get("pending_confirmations") or []
+    state["pending_confirmations"] = [
+        item for item in pending if str(item.get("action_id")) != action_id
+    ]
     _touch(state)
     write_state(path, state)
     return state, action
@@ -308,6 +472,7 @@ def complete_action(
     kind: str | None = None,
     strength: str = "medium",
     raw_ref: str | None = None,
+    event_at: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -315,6 +480,11 @@ def complete_action(
     action = _find_action_plan(state, action_id)
     if action.get("status") == "completed":
         raise CompassRuntimeError(f"action 已完成：{action_id}。")
+    if action.get("status") == "requires_confirmation":
+        raise CompassRuntimeError(
+            f"action {action_id} 仍处于风险待确认状态，无法完成。请先执行 "
+            f"`compass action confirm --action-id {action_id} --note ...` 解锁。"
+        )
     evidence = _build_evidence(
         state,
         source=str(action.get("source", "unknown")),
@@ -325,6 +495,7 @@ def complete_action(
         kind=kind or _kind_from_track(str(action.get("track", "manual"))),
         strength=strength,
         raw_ref=raw_ref,
+        event_at=event_at,
     )
     state.setdefault("evidence", []).append(evidence)
     state.setdefault("action_history", []).append(
@@ -369,6 +540,7 @@ def add_evidence(
     kind: str = "manual",
     strength: str = "medium",
     raw_ref: str | None = None,
+    event_at: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -383,6 +555,7 @@ def add_evidence(
         kind=kind,
         strength=strength,
         raw_ref=raw_ref,
+        event_at=event_at,
     )
     state.setdefault("evidence", []).append(evidence)
     state.setdefault("action_history", []).append(
@@ -404,6 +577,69 @@ def add_evidence(
     _touch(state)
     write_state(path, state)
     return state, evidence
+
+
+CHANGE_TYPES = {"deploy", "config", "data", "permission", "feature_flag", "rollback", "infra", "other"}
+
+
+def record_change(
+    path: str | Path,
+    *,
+    change_type: str,
+    target: str,
+    description: str,
+    event_at: str,
+    before: str = "",
+    after: str = "",
+    source: str = "",
+    evidence_ids: list[str] | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """登记一笔与排查相关的变更（发布、配置、数据、权限、灰度等）。
+
+    变更窗口是根因分析的核心线索之一：把"什么时间、对什么、做了什么改动"
+    结构化进 state.changes，后续 timeline 可与故障窗口对齐。
+    """
+
+    state = _load_state(path)
+    _require_confirmed(state)
+    _require_phase(state, {"action_ready", "evidence_collecting"}, "登记变更")
+    _require_existing_evidence(state, evidence_ids or [])
+    normalized_type = (change_type or "").strip().lower()
+    if normalized_type not in CHANGE_TYPES:
+        raise CompassRuntimeError(
+            f"未知 change_type：{change_type}。可选：{', '.join(sorted(CHANGE_TYPES))}。"
+        )
+    if not (target or "").strip():
+        raise CompassRuntimeError("change.target 不能为空（变更对象，例如 'order-server@v1.2.3' / 'config:rate-limit'）。")
+    if not (description or "").strip():
+        raise CompassRuntimeError("change.description 不能为空（变更内容简述，例如 '上线 v1.2.3' / '把 rate_limit 从 100 调到 50'）。")
+    if not (event_at or "").strip():
+        raise CompassRuntimeError("change.event_at 不能为空（变更真实发生时间，用于 timeline 对齐）。")
+
+    changes = state.setdefault("changes", [])
+    change_id = f"C{len(changes) + 1}"
+    record: dict[str, Any] = {
+        "id": change_id,
+        "change_type": normalized_type,
+        "target": target.strip(),
+        "description": description.strip(),
+        "event_at": event_at.strip(),
+        "before": (before or "").strip(),
+        "after": (after or "").strip(),
+        "source": (source or "").strip(),
+        "evidence": list(evidence_ids or []),
+        "created_at": now_iso(),
+    }
+    changes.append(record)
+    state["flow"].update(
+        {
+            "phase": "evidence_collecting",
+            "current_step": "change_logging",
+        }
+    )
+    _touch(state)
+    write_state(path, state)
+    return state, record
 
 
 def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
@@ -436,6 +672,35 @@ def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
     return state
 
 
+SCENE_FACT_CATEGORIES = {
+    "entrypoint",
+    "object",
+    "upstream",
+    "downstream",
+    "config",
+    "variant",
+    "diff",
+    "baseline",
+    "repro",
+}
+
+DIFF_KEYWORDS = (
+    "差异",
+    "对比",
+    "vs",
+    "VS",
+    "相比",
+    "不同于",
+    "不一样",
+    "之前",
+    "之后",
+    "原本",
+    "正常",
+    "异常",
+    "变更",
+)
+
+
 def add_scene_fact(
     path: str | Path,
     *,
@@ -444,19 +709,33 @@ def add_scene_fact(
     value: str,
     source: str,
     evidence_ids: list[str] | None = None,
+    event_at: str | None = None,
 ) -> dict[str, Any]:
     state = _load_state(path)
     _require_confirmed(state)
     _require_phase(state, {"action_ready", "evidence_collecting"}, "记录场景事实")
     _require_existing_evidence(state, evidence_ids or [])
+    normalized_category = (category or "").strip().lower()
+    if normalized_category not in SCENE_FACT_CATEGORIES:
+        raise CompassRuntimeError(
+            f"未知 scene fact category：{category}。可选：{', '.join(sorted(SCENE_FACT_CATEGORIES))}。"
+        )
+    if normalized_category == "diff" and not any(kw in value for kw in DIFF_KEYWORDS):
+        raise CompassRuntimeError(
+            "category=diff 的 scene fact 必须在 value 中体现对比性，至少包含一个对比词："
+            "差异 / 对比 / vs / 相比 / 不同于 / 之前 / 之后 / 原本 / 正常 / 异常 / 变更。"
+            "建议格式：'故障 X 正常为 Y，差异点 Z'。"
+        )
     fact = {
-        "category": category,
+        "category": normalized_category,
         "name": name,
         "value": value,
         "source": source,
         "evidence": evidence_ids or [],
         "created_at": now_iso(),
     }
+    if event_at:
+        fact["event_at"] = event_at
     state.setdefault("scene_facts", []).append(fact)
     state["flow"].update(
         {
@@ -477,6 +756,7 @@ def add_hypothesis(
     statement: str,
     source_facts: list[str] | None = None,
     source_evidence: list[str] | None = None,
+    falsifiable: str | None = None,
 ) -> dict[str, Any]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -488,17 +768,24 @@ def add_hypothesis(
     _require_existing_scene_facts(state, facts)
     _require_existing_evidence(state, evidence)
     existing = {item.get("id") for item in state.get("hypotheses", [])}
-    hypothesis = {
+    hypothesis: dict[str, Any] = {
         "id": hypothesis_id,
         "statement": statement,
         "status": "待验证",
         "source_facts": facts,
         "source_evidence": evidence,
     }
+    if falsifiable is not None:
+        text = str(falsifiable).strip()
+        if text:
+            hypothesis["falsifiable"] = text
     if hypothesis_id in existing:
         for idx, item in enumerate(state.get("hypotheses", [])):
             if item.get("id") == hypothesis_id:
-                state["hypotheses"][idx] = {**item, **hypothesis}
+                merged = {**item, **hypothesis}
+                if falsifiable is not None and not str(falsifiable).strip():
+                    merged.pop("falsifiable", None)
+                state["hypotheses"][idx] = merged
                 break
     else:
         state.setdefault("hypotheses", []).append(hypothesis)
@@ -516,6 +803,11 @@ def conclude_session(
     confidence: str = "medium",
     details: dict[str, str] | None = None,
     next_actions: list[str] | None = None,
+    mitigation: list[str] | None = None,
+    remediation: list[str] | None = None,
+    unsolved: list[str] | None = None,
+    pattern_scan: list[str] | None = None,
+    related_hypotheses: list[str] | None = None,
 ) -> dict[str, Any]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -527,12 +819,34 @@ def conclude_session(
     if not state.get("evidence"):
         raise CompassRuntimeError("没有证据，禁止输出结论。")
     clean_details = _validate_conclusion_details(details or {})
+    quality_warnings = _assess_conclusion_quality(
+        state=state,
+        summary=conclusion,
+        evidence_ids=evidence_ids,
+        confidence=confidence,
+        details=clean_details,
+        mitigation=mitigation or [],
+        remediation=remediation or [],
+        unsolved=unsolved or [],
+        related_hypotheses=related_hypotheses or [],
+    )
+    if related_hypotheses:
+        existing_hids = {str(h.get("id")) for h in state.get("hypotheses") or []}
+        invalid = [hid for hid in related_hypotheses if str(hid) not in existing_hids]
+        if invalid:
+            raise CompassRuntimeError(f"--hypothesis 引用了不存在的假设：{', '.join(invalid)}")
     state["conclusion"] = {
         "summary": conclusion,
         "confidence": confidence,
         "evidence": evidence_ids,
         "details": clean_details,
         "next_actions": next_actions or [],
+        "mitigation": list(mitigation or []),
+        "remediation": list(remediation or []),
+        "unsolved": list(unsolved or []),
+        "pattern_scan": list(pattern_scan or []),
+        "related_hypotheses": list(related_hypotheses or []),
+        "quality_warnings": quality_warnings,
     }
     state["strategy_review"] = _build_strategy_review(state, conclusion, evidence_ids, clean_details)
     state["flow"].update(
@@ -545,6 +859,169 @@ def conclude_session(
     _touch(state)
     write_state(path, state)
     return state
+
+
+_STRONG_KINDS = {"log", "sql", "code"}
+_STRONG_STRENGTHS = {"medium", "strong"}
+_CAUSAL_CONNECTORS = (
+    "因为",
+    "所以",
+    "由于",
+    "导致",
+    "触发",
+    "造成",
+    "致使",
+    "推断",
+    "因此",
+    "故",
+    "→",
+    "->",
+)
+
+
+def _assess_conclusion_quality(
+    *,
+    state: dict[str, Any],
+    summary: str,
+    evidence_ids: list[str],
+    confidence: str,
+    details: dict[str, str],
+    mitigation: list[str],
+    remediation: list[str],
+    unsolved: list[str],
+    related_hypotheses: list[str],
+) -> list[dict[str, str]]:
+    """对 conclude 输出的结论做软质量检查（不阻塞，只警告）。
+
+    检查项：
+        - confidence=high 但缺乏 ≥1 条 strong/medium 强证据 → CONF_GATE
+        - inference_chain 缺少因果连接词 → INF_CHAIN_WEAK
+        - mitigation 为空 → NO_MITIGATION
+        - remediation 为空 → NO_REMEDIATION
+        - 推断链与 summary 高度雷同 → INF_CHAIN_DUP
+        - 当前会话有"支持"状态假设但 conclude 未引用 → HYP_NOT_REFED
+        - 存在"相关"或"待验证"假设但既未排除也未引用 → OPEN_HYP
+    """
+
+    warnings: list[dict[str, str]] = []
+    evidence_pool = state.get("evidence") or []
+    refed_evidence = [e for e in evidence_pool if str(e.get("id")) in set(evidence_ids)]
+
+    has_strong_evidence = any(
+        str(e.get("kind", "")).lower() in _STRONG_KINDS
+        and str(e.get("strength", "")).lower() in _STRONG_STRENGTHS
+        for e in refed_evidence
+    )
+    if str(confidence).lower() == "high" and not has_strong_evidence:
+        warnings.append(
+            {
+                "code": "CONF_GATE",
+                "level": "block",
+                "message": (
+                    "confidence=high 需要至少 1 条 kind∈{log,sql,code} 且 strength∈{medium,strong} 的强证据；"
+                    "当前所引用证据均为弱证据，请补强证据或将 confidence 降至 medium。"
+                ),
+            }
+        )
+
+    inference_chain = (details or {}).get("inference_chain", "") or ""
+    inference_text = inference_chain.strip()
+    if inference_text:
+        if not any(token in inference_text for token in _CAUSAL_CONNECTORS):
+            warnings.append(
+                {
+                    "code": "INF_CHAIN_WEAK",
+                    "level": "warn",
+                    "message": (
+                        "推断链未出现明显因果连接词（因为/所以/由于/导致/→ 等）；"
+                        "建议改写为 '观察 X → 因 Y → 触发 Z' 的形式，让因果关系外显。"
+                    ),
+                }
+            )
+        if summary and inference_text.replace(" ", "").startswith(summary.replace(" ", "")[:30]):
+            warnings.append(
+                {
+                    "code": "INF_CHAIN_DUP",
+                    "level": "warn",
+                    "message": (
+                        "推断链开头与 summary 高度雷同，疑似只是 summary 的复述；"
+                        "推断链应展示证据→中间事实→结论的链路，而不是结论本身。"
+                    ),
+                }
+            )
+
+    if not mitigation:
+        warnings.append(
+            {
+                "code": "NO_MITIGATION",
+                "level": "warn",
+                "message": (
+                    "未提供 --mitigation（止血动作）。专业排查建议先给出短期止血措施，"
+                    "即使本次问题已自愈，也建议明确说明 '无需止血' 的理由。"
+                ),
+            }
+        )
+    if not remediation:
+        warnings.append(
+            {
+                "code": "NO_REMEDIATION",
+                "level": "warn",
+                "message": (
+                    "未提供 --remediation（根治动作）。建议把根治措施与负责人/排期写明，"
+                    "和 mitigation 区分开。"
+                ),
+            }
+        )
+
+    hypotheses = state.get("hypotheses") or []
+    refed_hids = set(related_hypotheses)
+    supported = [h for h in hypotheses if str(h.get("status", "")).lower() in {"支持", "supported"}]
+    supported_no_falsifiable = [
+        h for h in supported if not str(h.get("falsifiable", "")).strip()
+    ]
+    open_hypos = [
+        h
+        for h in hypotheses
+        if str(h.get("status", "")).lower() in {"待验证", "相关", "pending", "related"}
+    ]
+    if supported and not refed_hids:
+        warnings.append(
+            {
+                "code": "HYP_NOT_REFED",
+                "level": "warn",
+                "message": (
+                    "会话中存在 status=支持 的假设，但 conclude 未通过 --hypothesis 引用任意一个；"
+                    "建议显式引用，使结论与假设链路对齐。"
+                ),
+            }
+        )
+    if supported_no_falsifiable:
+        ids = ", ".join(str(h.get("id", "")) for h in supported_no_falsifiable)
+        warnings.append(
+            {
+                "code": "HYP_NO_FALSIFIABLE",
+                "level": "warn",
+                "message": (
+                    f"已被证据支持的假设（{ids}）未填 falsifiable（反证条件）；"
+                    "可证伪是科学结论的最低门槛——请用 `compass hypothesis add --id ... --falsifiable ...` "
+                    "补充 '如果 X 不成立则结论不成立' 的反证陈述。"
+                ),
+            }
+        )
+    if open_hypos and not unsolved:
+        open_ids = ", ".join(str(h.get("id", "")) for h in open_hypos)
+        warnings.append(
+            {
+                "code": "OPEN_HYP",
+                "level": "info",
+                "message": (
+                    f"存在未结论的假设（{open_ids}），但 --unsolved 为空；"
+                    "若它们与本次结论无关请显式声明 'unrelated' 或转入 --unsolved 暂列。"
+                ),
+            }
+        )
+
+    return warnings
 
 
 def decide_strategy_review(
@@ -799,6 +1276,44 @@ def _validate_action_plan_fields(track: str, action_input: dict[str, str], gate:
         _validate_sls_query_policy(action_input, gate)
 
 
+def _enforce_sql_explain_gate(
+    action_input: dict[str, str],
+    gate: dict[str, str],
+) -> SafetyGateResult:
+    """对 SQL 计划做真实门禁评估。
+
+    prod 环境强制要求 input.explain_text，由 runtime 调 ``assess_sql_explain``
+    解析风险等级，结果直接覆盖 Agent 自报的 gate 字段，避免"声明就行"的纸老虎。
+    test/uat 环境跳过强卡，但仍写入 status=passed/risk=low 的标准 gate 字段。
+    """
+    sql = str(action_input.get("sql", "")).strip()
+    if not sql:
+        raise CompassRuntimeError("track sql 缺少 input 字段：sql。")
+    env = str(action_input.get("env", "prod")).strip().lower() or "prod"
+    explain_text = str(action_input.get("explain_text", "")).strip()
+    if env == "prod" and not explain_text:
+        raise CompassRuntimeError(
+            "track sql 在 prod 环境必须提供 input.explain_text（EXPLAIN 原文）；"
+            "runtime 会解析后判定风险，禁止 Agent 自报 gate.status。"
+            "如需绕过强卡，请显式声明 env=test 或 env=uat。"
+        )
+    result = assess_sql_explain(sql, explain_text, env)
+    gate["type"] = "sql"
+    gate["explain"] = "passed" if result.status == "passed" else result.status
+    gate["risk"] = result.risk_level
+    gate["status"] = result.status
+    gate["env"] = env
+    gate["assessor"] = "compass.sql_gate.assess_sql_explain"
+    rows = result.details.get("rows")
+    if rows is not None:
+        gate["rows"] = str(rows)
+    if result.details.get("partitions"):
+        gate["partitions"] = str(result.details["partitions"])
+    if result.details.get("scan"):
+        gate["scan"] = str(result.details["scan"])
+    return result
+
+
 def _validate_sls_query_policy(action_input: dict[str, str], gate: dict[str, str]) -> None:
     query = str(action_input.get("query", "")).strip()
     anchor = str(action_input.get("anchor", "")).strip()
@@ -998,6 +1513,7 @@ def _build_evidence(
     kind: str,
     strength: str,
     raw_ref: str | None,
+    event_at: str | None = None,
 ) -> dict[str, Any]:
     _validate_evidence_quality(kind, strength)
     evidence_id = f"E{len(state.get('evidence', [])) + 1}"
@@ -1017,6 +1533,8 @@ def _build_evidence(
         evidence["action_id"] = action_id
     if raw_ref:
         evidence["raw_ref"] = raw_ref
+    if event_at:
+        evidence["event_at"] = event_at
     return evidence
 
 

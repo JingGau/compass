@@ -301,10 +301,12 @@ Track 门禁：
 | track | 必填 input | 必填 gate |
 |-------|------------|-----------|
 | sls | `query`, `time_range`, `anchor` | `type`, `status`, `keyword_source` |
-| sql | `sql`, `env` | `type`, `explain`, `risk` |
+| sql | `sql`, `env`，prod 还需 `explain_text` | `type`（`status` / `risk` / `explain` 由 runtime 真实评估 EXPLAIN 后写入） |
 | code | `repo`, `target` | `type`, `scope` |
 | kb | `query` | `type` |
 | manual | 无 | 无 |
+
+prod SQL 中/高风险时 runtime 会把 action 标为 `requires_confirmation`，需要 `python3 -m compass_cli action confirm --action-id <id> --note "..."` 后才能 `action complete`。
 
 ## 常用命令
 
@@ -315,8 +317,24 @@ python3 -m compass_cli setup-check --json
 # 结构化一个问题，不实际查询
 python3 -m compass_cli intake "订单 123456 支付成功但状态未推进，今天上午" --json
 
-# 搜索本地知识库
+# 搜索本地知识库（同时搜 markdown 文档 + 学习的 yaml 知识）
 python3 -m compass_cli kb search "清分单 入金通知" --json
+
+# 录入一条可复用的小颗粒知识（≤300 字）
+python3 -m compass_cli kb learn --statement "C 端订单号是 19 位数字，前 14 位是 yyyyMMddHHmmss" --tag order --tag id-rule
+
+# 召回与当前问题最相关的 top-N 通用知识
+python3 -m compass_cli kb suggest --query "用户订单号 19 位匹配不到" --top 5
+
+# 列出已学习的全部知识
+python3 -m compass_cli kb list
+
+# 登记一笔与故障相关的变更
+python3 -m compass_cli change record --type deploy --target order-server@v1.2.3 \
+  --description "上线 v1.2.3，含 SQL DDL" --event-at "2026-04-29 13:30" --source jenkins-#1234
+
+# 故障时间线（合并 changes / scene_facts / evidence / actions 的 event_at）
+python3 -m compass_cli timeline
 
 # 查看当前状态
 python3 -m compass_cli state show --json
@@ -324,6 +342,22 @@ python3 -m compass_cli state show --json
 # 生成报告
 python3 -m compass_cli report --audience technical
 ```
+
+## v4 增强能力（专业化）
+
+| 能力 | 命令/字段 | 作用 |
+|------|-----------|------|
+| 通用知识库 | `kb learn / kb suggest / kb list` + `start` 自动召回 | 排查中沉淀小颗粒事实/规则，下次自动注入上下文 |
+| 变更登记 | `change record / change list` | 把发布、配置、灰度等变更结构化进 timeline |
+| 故障时间线 | `timeline` + report 头部表 | 把 changes / scene_facts / evidence / actions 按 event_at 排序 |
+| baseline / diff 事实 | `scene fact --category baseline / --category diff` | 显式登记"正常态 vs 异常态"对比，category=diff 强制有对比词 |
+| 根因反思 | `next` 自动输出"反思三问" + `prompts/result-analysis.md` 五问模板 | 防止把"现象"当根因；强制回答"为什么之前没出"和"同类还有谁" |
+| 反证条件 | `hypothesis add --falsifiable "<反证>"` | 让结论可证伪；conclude 时若支持假设缺反证会软警告 |
+| 止血/根治拆分 | `conclude --mitigation ... --remediation ...` | 区分短期止血与长期根治，避免"建议"混作一团 |
+| 未解之谜 | `conclude --unsolved "<开放问题>"` | 显式保留无法在本次定位的疑点 |
+| 同类扫描 | `conclude --pattern-scan "<相邻入口/数据/链路>"` | 根因定位后必须列出同类影响面，避免"只解一个、漏一片" |
+| 关联假设 | `conclude --hypothesis H1 --hypothesis H2` | 让结论显式引用支持它的假设 |
+| 结论质量提示 | conclude 输出 `quality_warnings`，report 渲染表格 | confidence=high 必须有强证据；推断链需有因果连接词；缺 mitigation/remediation/反证条件均会警告 |
 
 ## Obsidian 知识库
 

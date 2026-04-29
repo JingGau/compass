@@ -27,14 +27,17 @@ Do not use this skill for:
 ## Mandatory Workflow
 
 1. 默认使用线上环境 `prod` 排查；只有用户明确指定 test/uat/测试/预发时才切换环境。
-2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。
+2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。`compass start` 会自动从通用知识库（`memory/knowledge.yaml`）召回 top-5 适用知识，Agent 必须把它们当成"待校对的提示"而不是"已认证的事实"。
 3. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程。
-4. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence。
-5. 新假设必须引用 scene fact 或 evidence。
-6. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节。
-7. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
-8. 最终报告必须优先由 `report --audience technical|business|review` 生成。
-9. 报告后必须主动询问用户是否保留本次最终查询策略；用户确认后用 `strategy keep` 沉淀，用户否认后用 `strategy discard` 记录原因。
+4. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
+5. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
+6. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
+7. 当证据初步成型时，`compass next` 会主动输出【根因反思三问】（这是现象还是根因 / 为什么之前没出问题 / 同类还有谁），必须实际过一遍再决定是否 `conclude`，不得直接跳到结论。
+8. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
+9. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
+10. 最终报告必须优先由 `report --audience technical|business|review` 生成。报告头部会自动渲染 timeline / 变更窗口 / 适用知识 / 止血与根治 / 未解之谜 / 同类扫描 / 结论质量提示。
+11. 报告后必须主动询问用户是否保留本次最终查询策略；用户确认后用 `strategy keep` 沉淀，用户否认后用 `strategy discard` 记录原因。
+12. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
 
 最小命令链：
 
@@ -64,12 +67,24 @@ python3 -m compass_cli conclude --conclusion "<结论>" --evidence E1 --confiden
   --why-business "<业务触发条件>" \
   --blast-radius "<量化影响范围>" \
   --how "<传播链路>" \
-  --inference-chain "<连续因果推断链>"
+  --inference-chain "<连续因果推断链>" \
+  --mitigation "<短期止血动作>" \
+  --remediation "<长期根治动作>" \
+  --pattern-scan "<同类扫描方向>" \
+  --unsolved "<本次未解之谜>" \
+  --hypothesis H1
 python3 -m compass_cli report --audience technical
 python3 -m compass_cli report --audience review
 python3 -m compass_cli strategy keep --note "<为什么这次查法值得保留>"
 # 或
 python3 -m compass_cli strategy discard --note "<为什么不保留>"
+# 排查中沉淀的可复用知识 / 通用规则（≤300 字一条）
+python3 -m compass_cli kb learn --statement "<一句话事实/规则>" --tag <topic> --tag <id-rule>
+# 与故障相关的变更登记
+python3 -m compass_cli change record --type deploy --target <服务@版本> \
+  --description "<变更内容>" --event-at "yyyy-mm-dd HH:MM" --source <jenkins-id>
+# 故障时间线（合并 changes / scene_facts(event_at) / evidence(event_at) / action_history）
+python3 -m compass_cli timeline
 ```
 
 ## Hard Rules
@@ -95,10 +110,16 @@ Track 门禁：
 | track | 必填 input | 必填 gate |
 |-------|------------|-----------|
 | sls | `query`, `time_range`, `anchor` | `type`, `status`, `keyword_source` |
-| sql | `sql`, `env` | `type`, `explain`, `risk` |
+| sql | `sql`, `env`，prod 必须额外提供 `explain_text` | `type`（`status` / `risk` / `explain` 由 runtime 解析 EXPLAIN 后真实写入，禁止自报） |
 | code | `repo`, `target` | `type`, `scope` |
 | kb | `query` | `type` |
 | manual | 无 | 无 |
+
+prod SQL plan 流程要点：
+
+1. `compass action plan --track sql --input "sql=..." --input "env=prod" --input "explain_text=$(EXPLAIN 原文)"` 后 runtime 调 `tools/sql_gate.assess_sql_explain` 真实评估。
+2. 中风险（rows ≥ 10 万）/ 高风险（rows > 100 万 / EXPLAIN 解析失败）会把 action 标记为 `requires_confirmation` 并写入 `state.pending_confirmations`，此时 `action complete` 会被拒绝。
+3. 解锁方式：用户审视风险后回执 `compass action confirm --action-id <id> --note "..."`，再执行 `action complete`。
 
 ## Progressive References
 

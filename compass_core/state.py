@@ -12,7 +12,7 @@ def now_iso() -> str:
 
 def default_state() -> dict[str, Any]:
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "session_id": f"sess_{int(datetime.now(timezone.utc).timestamp())}",
         "created_at": now_iso(),
         "updated_at": now_iso(),
@@ -32,6 +32,9 @@ def default_state() -> dict[str, Any]:
         "strategy_review": {},
         "ruled_out": [],
         "next_actions": [],
+        "applicable_knowledge": [],
+        "changes": [],
+        "pending_confirmations": [],
     }
 
 
@@ -70,7 +73,7 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     if not state:
         return state
     migrated = dict(state)
-    migrated.setdefault("schema_version", 1)
+    migrated.setdefault("schema_version", 2)
     migrated.setdefault("created_at", now_iso())
     migrated.setdefault("updated_at", now_iso())
     migrated.setdefault("flow", {"current_step": 1, "completed_steps": [], "execution_mode": "auto"})
@@ -89,6 +92,11 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("strategy_review", {})
     migrated.setdefault("ruled_out", [])
     migrated.setdefault("next_actions", [])
+    migrated.setdefault("applicable_knowledge", [])
+    migrated.setdefault("changes", [])
+    migrated.setdefault("pending_confirmations", [])
+    if int(migrated.get("schema_version", 1)) < 2:
+        migrated["schema_version"] = 2
     return migrated
 
 
