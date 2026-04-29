@@ -84,6 +84,7 @@ def _entry(
     title: str,
     detail: str,
     tags: list[str] | None = None,
+    related_changes: list[str] | None = None,
 ) -> dict[str, Any]:
     return {
         "ts": ts_raw,
@@ -94,6 +95,7 @@ def _entry(
         "title": title,
         "detail": detail,
         "tags": list(tags or []),
+        "related_changes": list(related_changes or []),
     }
 
 
@@ -136,6 +138,7 @@ def build_timeline(state: dict[str, Any]) -> list[dict[str, Any]]:
     for evidence in state.get("evidence") or []:
         if not evidence.get("event_at"):
             continue
+        related_changes = [str(c) for c in (evidence.get("change_ids") or [])]
         entries.append(
             _entry(
                 ts_raw=str(evidence.get("event_at", "")),
@@ -145,6 +148,7 @@ def build_timeline(state: dict[str, Any]) -> list[dict[str, Any]]:
                 title=f"[{evidence.get('kind', '')}] {evidence.get('source', '')}",
                 detail=str(evidence.get("summary", "")),
                 tags=[str(evidence.get("kind", "")), str(evidence.get("strength", ""))],
+                related_changes=related_changes,
             )
         )
 
@@ -185,5 +189,9 @@ def format_timeline_text(entries: list[dict[str, Any]]) -> str:
         ref = entry["ref_id"] or "-"
         title = entry["title"]
         detail = entry["detail"]
-        lines.append(f"{ts}  [{kind}/{ref}] {title} :: {detail}")
+        suffix = ""
+        related = entry.get("related_changes") or []
+        if related:
+            suffix = f"  ⤴ {','.join(related)}"
+        lines.append(f"{ts}  [{kind}/{ref}] {title} :: {detail}{suffix}")
     return "\n".join(lines)

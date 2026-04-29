@@ -8,7 +8,7 @@ from typing import Any
 from compass_core.intake import intake_problem
 from compass_core.state import default_state, now_iso, read_or_init_state, write_state
 from tools.action_cards import ActionResult, SafetyGateResult
-from tools.evidence_graph import EvidenceGraph
+from tools.evidence_graph import EvidenceGraph, max_simple_path_length_edges, summarize_graph_nodes_for_bisect
 from tools.sql_gate import assess_sql_explain
 
 
@@ -84,6 +84,7 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
         "scene": intake.scene,
         "environment": intake.environment,
         "impact": "未知",
+        "detected_at": now_iso(),
     }
     state["environment"] = intake.environment
     state["mode"] = "investigation_only"
@@ -171,6 +172,58 @@ def _maybe_reflection_questions(state: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+REFLECTION_QUESTIONS = {
+    "1": "这是【现象】还是【根因】？把当前结论再问一次 'why'，能不能继续往下挖？",
+    "2": "为什么【之前】没出问题、【现在】才出？把'变化点'（变更/数据/流量/上游）跟故障窗口对齐。",
+    "3": "同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？",
+}
+
+
+def record_reflection_answer(
+    path: str | Path,
+    *,
+    question_id: str,
+    answer: str,
+) -> dict[str, Any]:
+    """落盘一条根因反思的回答，写入 state.flow.reflection_answers。
+
+    Args:
+        question_id: 1/2/3，对应根因反思三问的索引；
+        answer: AI 或排查者本人对该问题的回答；不能为空。
+
+    同一 question_id 重复回答时覆盖最新一次回答。
+    """
+
+    state = _load_state(path)
+    qid = str(question_id).strip()
+    if qid not in REFLECTION_QUESTIONS:
+        raise CompassRuntimeError(
+            f"未知 question_id：{question_id}。可选：{', '.join(REFLECTION_QUESTIONS.keys())}（对应根因反思三问）。"
+        )
+    text = str(answer or "").strip()
+    if not text:
+        raise CompassRuntimeError("reflection.answer 不能为空，请用一句话写清你对该问题的判断。")
+    flow = state.setdefault("flow", {})
+    answers = flow.setdefault("reflection_answers", [])
+    item = {
+        "question_id": qid,
+        "prompt": REFLECTION_QUESTIONS[qid],
+        "answer": text,
+        "answered_at": now_iso(),
+    }
+    replaced = False
+    for idx, existing in enumerate(answers):
+        if str(existing.get("question_id", "")).strip() == qid:
+            answers[idx] = item
+            replaced = True
+            break
+    if not replaced:
+        answers.append(item)
+    _touch(state)
+    write_state(path, state)
+    return state
+
+
 def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[str, Any]]:
     """根据 intake 内容自动从 KB 召回最多 top_n 条相关通用知识。
 
@@ -230,6 +283,50 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
     return state
 
 
+BISECT_HINT_MIN_CHAIN_EDGES = 3
+
+
+def _maybe_attach_bisect_hint(path: str | Path, state: dict[str, Any], payload: dict[str, Any]) -> None:
+    """当证据图中最长链路边数≥阈值时在 next 载荷中附上「二分定位」建议（每会话至多一次）。
+
+    「深度」：有向图上简单路径的边数的最大值。"""
+    graph = state.get("evidence_graph") or {"nodes": [], "edges": []}
+    depth = max_simple_path_length_edges(graph)
+    if depth < BISECT_HINT_MIN_CHAIN_EDGES:
+        return
+    flow = state.setdefault("flow", {})
+    if flow.get("bisect_hint_shown"):
+        return
+
+    preview_items = summarize_graph_nodes_for_bisect(graph)
+    preview = ""
+    if preview_items:
+        preview = "; ".join(
+            f"{t}:{(val[:42] + '…') if len(val) > 42 else val}" for t, val in preview_items[:8]
+        )
+
+    hint_text = (
+        f"【二分定位建议】证据图中已出现关联深度≥{BISECT_HINT_MIN_CHAIN_EDGES}（当前最长约 "
+        f"{depth} 条边）。请在链路上的**中间层节点**两侧各补充一条可追溯证据——例如：在中间 API 或服务方法处"
+        f"对上/下游各查一条同源 trace、或各采一条与时间窗匹配的日志/SQL——用对照缩小一半可疑范围。"
+    )
+    if preview:
+        hint_text += f" 节点取样：{preview}"
+
+    payload["bisect_hint"] = {
+        "triggered": True,
+        "max_chain_edges": depth,
+        "threshold_edges": BISECT_HINT_MIN_CHAIN_EDGES,
+        "message": hint_text,
+    }
+    flow["bisect_hint_shown"] = True
+    base_msg = str(payload.get("message") or "").rstrip()
+    payload["message"] = (base_msg + "\n\n" + hint_text) if base_msg else hint_text
+
+    persist = {k: v for k, v in state.items() if k != "__path__"}
+    write_state(path, persist)
+
+
 def next_step(path: str | Path) -> dict[str, Any]:
     state = _load_state(path)
     state["__path__"] = str(path)
@@ -274,13 +371,16 @@ def next_step(path: str | Path) -> dict[str, Any]:
             }
         reflection = _maybe_reflection_questions(state)
         if reflection is not None:
+            _maybe_attach_bisect_hint(path, state, reflection)
             return reflection
-        return {
+        payload = {
             "phase": phase,
             "blocked": False,
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
             "next_actions": ["action record", "hypothesis add", "conclude"],
         }
+        _maybe_attach_bisect_hint(path, state, payload)
+        return payload
     if phase == "concluded":
         review = state.get("strategy_review") or {}
         if review.get("status") == "pending":
@@ -541,10 +641,12 @@ def add_evidence(
     strength: str = "medium",
     raw_ref: str | None = None,
     event_at: str | None = None,
+    change_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     state = _load_state(path)
     _require_confirmed(state)
     _require_phase(state, {"action_ready", "evidence_collecting"}, "新增证据")
+    _require_existing_changes(state, change_ids or [])
     evidence = _build_evidence(
         state,
         source=source,
@@ -556,6 +658,7 @@ def add_evidence(
         strength=strength,
         raw_ref=raw_ref,
         event_at=event_at,
+        change_ids=change_ids,
     )
     state.setdefault("evidence", []).append(evidence)
     state.setdefault("action_history", []).append(
@@ -757,16 +860,19 @@ def add_hypothesis(
     source_facts: list[str] | None = None,
     source_evidence: list[str] | None = None,
     falsifiable: str | None = None,
+    change_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     state = _load_state(path)
     _require_confirmed(state)
     _require_phase(state, {"action_ready", "evidence_collecting"}, "新增假设")
     facts = source_facts or []
     evidence = source_evidence or []
-    if not facts and not evidence:
-        raise CompassRuntimeError("假设必须引用至少一个 scene fact 或 evidence。")
+    changes_ref = [str(c).strip() for c in (change_ids or []) if str(c).strip()]
+    if not facts and not evidence and not changes_ref:
+        raise CompassRuntimeError("假设必须引用至少一个 scene fact / evidence / change。")
     _require_existing_scene_facts(state, facts)
     _require_existing_evidence(state, evidence)
+    _require_existing_changes(state, changes_ref)
     existing = {item.get("id") for item in state.get("hypotheses", [])}
     hypothesis: dict[str, Any] = {
         "id": hypothesis_id,
@@ -775,6 +881,8 @@ def add_hypothesis(
         "source_facts": facts,
         "source_evidence": evidence,
     }
+    if changes_ref:
+        hypothesis["source_changes"] = changes_ref
     if falsifiable is not None:
         text = str(falsifiable).strip()
         if text:
@@ -795,6 +903,109 @@ def add_hypothesis(
     return state
 
 
+SEVERITY_LEVELS = ("sev1", "sev2", "sev3", "sev4")
+
+_INFERENCE_SPLIT_REGEX = re.compile(r"\s*(?:→|->|=>|\u21d2)\s*")
+
+
+def _split_inference_steps(text: str) -> list[str]:
+    """把推断链拆成有序步骤；保留原文用于 details.inference_chain。"""
+
+    if not text:
+        return []
+    parts = _INFERENCE_SPLIT_REGEX.split(text.strip())
+    return [p.strip() for p in parts if p.strip()]
+
+
+def _diff_minutes(start: str, end: str | None) -> int | None:
+    """计算两个时间字符串之间的分钟数，无法解析则返回 None。"""
+
+    if not start or not end:
+        return None
+    from .timeline import _parse_ts  # 复用 timeline 的宽容解析
+
+    s = _parse_ts(start)
+    e = _parse_ts(end)
+    if s is None or e is None:
+        return None
+    diff = (e - s) / 60.0
+    if diff < 0:
+        return None
+    return int(round(diff))
+
+
+def _normalize_action_items(items: list | None) -> list[dict[str, str]]:
+    """把 mitigation/remediation 统一为 action item dict 列表。
+
+    支持的输入：
+        - "字符串"  →  {"description": "字符串"}
+        - "owner=..., due=..., url=..., desc=..." 形式
+        - 已是 dict 直接保留必要字段
+    """
+
+    if not items:
+        return []
+    out: list[dict[str, str]] = []
+    for raw in items:
+        if isinstance(raw, dict):
+            item = {
+                "description": str(raw.get("description") or raw.get("desc") or "").strip(),
+                "owner": str(raw.get("owner") or "").strip(),
+                "due": str(raw.get("due") or "").strip(),
+                "url": str(raw.get("url") or "").strip(),
+                "status": str(raw.get("status") or "open").strip(),
+            }
+        else:
+            text = str(raw).strip()
+            if "=" in text and any(
+                key in text for key in ("owner=", "due=", "url=", "status=", "desc=", "description=")
+            ):
+                kv: dict[str, str] = {}
+                for chunk in re.split(r",\s*", text):
+                    if "=" in chunk:
+                        k, v = chunk.split("=", 1)
+                        kv[k.strip().lower()] = v.strip()
+                item = {
+                    "description": kv.get("description") or kv.get("desc") or "",
+                    "owner": kv.get("owner", ""),
+                    "due": kv.get("due", ""),
+                    "url": kv.get("url", ""),
+                    "status": kv.get("status", "open"),
+                }
+            else:
+                item = {
+                    "description": text,
+                    "owner": "",
+                    "due": "",
+                    "url": "",
+                    "status": "open",
+                }
+        if not item["description"]:
+            continue
+        out.append({k: v for k, v in item.items() if v or k in ("description", "status")})
+    return out
+
+
+def _suggest_severity(blast_radius: str) -> str:
+    """根据 blast_radius 文本启发式推荐 severity；不命中则给 sev3 中等。
+
+    规则：
+        - 含"全部/所有用户/全站/系统不可用/资金损失" → sev1
+        - 含"批量/大面积/N% 用户/超过 N00" → sev2
+        - 含"个别/单个用户/单点/单笔" → sev4
+        - 其余 → sev3
+    """
+
+    text = (blast_radius or "").lower()
+    if any(token in text for token in ("全部", "所有用户", "全站", "系统不可用", "资金损失", "重大资损")):
+        return "sev1"
+    if any(token in text for token in ("批量", "大面积", "%", "千", "万", "百名", "数百", "数千")):
+        return "sev2"
+    if any(token in text for token in ("单个用户", "个别", "单点", "单笔", "1 人", "1人")):
+        return "sev4"
+    return "sev3"
+
+
 def conclude_session(
     path: str | Path,
     *,
@@ -808,6 +1019,12 @@ def conclude_session(
     unsolved: list[str] | None = None,
     pattern_scan: list[str] | None = None,
     related_hypotheses: list[str] | None = None,
+    tldr: str | None = None,
+    severity: str | None = None,
+    detected_at: str | None = None,
+    acknowledged_at: str | None = None,
+    mitigated_at: str | None = None,
+    resolved_at: str | None = None,
 ) -> dict[str, Any]:
     state = _load_state(path)
     _require_confirmed(state)
@@ -835,17 +1052,59 @@ def conclude_session(
         invalid = [hid for hid in related_hypotheses if str(hid) not in existing_hids]
         if invalid:
             raise CompassRuntimeError(f"--hypothesis 引用了不存在的假设：{', '.join(invalid)}")
+
+    if severity is not None and severity:
+        sev = severity.strip().lower()
+        if sev not in SEVERITY_LEVELS:
+            raise CompassRuntimeError(
+                f"未知 severity 等级：{severity}。可选：{', '.join(SEVERITY_LEVELS)}。"
+            )
+    else:
+        sev = _suggest_severity(clean_details.get("blast_radius", ""))
+
+    tldr_text = (tldr or "").strip()
+    if tldr_text:
+        sentences = [s for s in re.split(r"[。！？\.!?\n]", tldr_text) if s.strip()]
+        if len(sentences) > 3:
+            quality_warnings.append(
+                {
+                    "code": "TLDR_TOO_LONG",
+                    "level": "warn",
+                    "message": (
+                        f"TL;DR 检测到 {len(sentences)} 个句子（建议 ≤3 句）；"
+                        "TL;DR 是给非技术决策者一眼看完的摘要，过长会失去价值。"
+                    ),
+                }
+            )
+
+    timing = {}
+    detected = (detected_at or state.get("problem", {}).get("detected_at") or "").strip()
+    if detected:
+        timing["detected_at"] = detected
+    if acknowledged_at:
+        timing["acknowledged_at"] = acknowledged_at.strip()
+    if mitigated_at:
+        timing["mitigated_at"] = mitigated_at.strip()
+    timing["resolved_at"] = (resolved_at or now_iso()).strip()
+    timing["mttd_minutes"] = _diff_minutes(detected, timing.get("acknowledged_at"))
+    timing["mttm_minutes"] = _diff_minutes(timing.get("acknowledged_at"), timing.get("mitigated_at"))
+    timing["mttr_minutes"] = _diff_minutes(detected, timing.get("resolved_at"))
+
     state["conclusion"] = {
         "summary": conclusion,
+        "tldr": tldr_text,
+        "severity": sev,
         "confidence": confidence,
         "evidence": evidence_ids,
         "details": clean_details,
+        "inference_steps": _split_inference_steps(clean_details.get("inference_chain", "")),
         "next_actions": next_actions or [],
-        "mitigation": list(mitigation or []),
-        "remediation": list(remediation or []),
+        "mitigation": _normalize_action_items(mitigation),
+        "remediation": _normalize_action_items(remediation),
         "unsolved": list(unsolved or []),
         "pattern_scan": list(pattern_scan or []),
         "related_hypotheses": list(related_hypotheses or []),
+        "timing": timing,
         "quality_warnings": quality_warnings,
     }
     state["strategy_review"] = _build_strategy_review(state, conclusion, evidence_ids, clean_details)
@@ -950,7 +1209,9 @@ def _assess_conclusion_quality(
                 }
             )
 
-    if not mitigation:
+    mitigation_norm = _normalize_action_items(mitigation)
+    remediation_norm = _normalize_action_items(remediation)
+    if not mitigation_norm:
         warnings.append(
             {
                 "code": "NO_MITIGATION",
@@ -961,7 +1222,7 @@ def _assess_conclusion_quality(
                 ),
             }
         )
-    if not remediation:
+    if not remediation_norm:
         warnings.append(
             {
                 "code": "NO_REMEDIATION",
@@ -969,6 +1230,20 @@ def _assess_conclusion_quality(
                 "message": (
                     "未提供 --remediation（根治动作）。建议把根治措施与负责人/排期写明，"
                     "和 mitigation 区分开。"
+                ),
+            }
+        )
+    remediation_no_owner = [r for r in remediation_norm if not r.get("owner")]
+    if remediation_norm and remediation_no_owner:
+        ids = ", ".join(r.get("description", "") for r in remediation_no_owner[:2])
+        warnings.append(
+            {
+                "code": "REMEDIATION_NO_OWNER",
+                "level": "info",
+                "message": (
+                    f"根治动作未指定 owner（如：{ids}…）。建议用 "
+                    "'owner=张三, due=2026-05-10, url=工单链接, desc=...' 形式"
+                    "明确责任人/截止时间/工单。"
                 ),
             }
         )
@@ -1311,6 +1586,8 @@ def _enforce_sql_explain_gate(
         gate["partitions"] = str(result.details["partitions"])
     if result.details.get("scan"):
         gate["scan"] = str(result.details["scan"])
+    if explain_text:
+        gate["explain_text"] = explain_text
     return result
 
 
@@ -1514,6 +1791,7 @@ def _build_evidence(
     strength: str,
     raw_ref: str | None,
     event_at: str | None = None,
+    change_ids: list[str] | None = None,
 ) -> dict[str, Any]:
     _validate_evidence_quality(kind, strength)
     evidence_id = f"E{len(state.get('evidence', [])) + 1}"
@@ -1535,7 +1813,24 @@ def _build_evidence(
         evidence["raw_ref"] = raw_ref
     if event_at:
         evidence["event_at"] = event_at
+    if change_ids:
+        normalized = [str(cid).strip() for cid in change_ids if str(cid).strip()]
+        if normalized:
+            evidence["change_ids"] = normalized
     return evidence
+
+
+def _require_existing_changes(state: dict[str, Any], change_ids: list[str]) -> None:
+    """校验引用的 change_id 必须已经登记，否则抛出。"""
+
+    if not change_ids:
+        return
+    existing = {str(c.get("id", "")).strip() for c in (state.get("changes") or [])}
+    missing = [cid for cid in change_ids if cid and cid not in existing]
+    if missing:
+        raise CompassRuntimeError(
+            "引用的变更不存在：" + ", ".join(missing) + "。请先通过 `compass change record ...` 登记变更。"
+        )
 
 
 def _kind_from_track(track: str) -> str:

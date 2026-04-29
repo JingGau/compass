@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import dataclass
+from typing import Any
 
 from tools.action_cards import ActionResult
 
@@ -69,4 +71,43 @@ class EvidenceGraph:
             for edge in sorted(self._edges, key=lambda item: (item.from_id, item.to_id, item.relation))
         ]
         return {"nodes": nodes, "edges": edges}
+
+
+def max_simple_path_length_edges(graph_dict: dict[str, Any]) -> int:
+    """计算证据图中有向简单路径的最大边数（链路深度）。
+
+    典型场景：action → api → method → table 等为一条链，
+    depth=3 条边≈跨越 4 个节点。"""
+    nodes = {str(n["id"]) for n in graph_dict.get("nodes", []) if n.get("id")}
+    if not nodes:
+        return 0
+    adj: dict[str, list[str]] = defaultdict(list)
+    for e in graph_dict.get("edges", []) or []:
+        f_id, to_id = e.get("from"), e.get("to")
+        if f_id in nodes and to_id in nodes:
+            adj[str(f_id)].append(str(to_id))
+
+    best = 0
+
+    def dfs(u: str, path: frozenset[str]) -> int:
+        max_len_local = 0
+        for v in adj.get(u, []):
+            if v not in path:
+                max_len_local = max(max_len_local, 1 + dfs(v, path | {v}))
+        return max_len_local
+
+    for start in nodes:
+        best = max(best, dfs(start, frozenset({start})))
+    return best
+
+
+def summarize_graph_nodes_for_bisect(graph_dict: dict[str, Any]) -> list[tuple[str, str]]:
+    """返回 (类型, id) 列表供二分提示罗列中间节点候选（不去重拓扑序，仅取样）。"""
+    out: list[tuple[str, str]] = []
+    for n in sorted(graph_dict.get("nodes", []) or [], key=lambda x: str(x.get("id", ""))):
+        nid = str(n.get("id", ""))
+        parts = nid.split(":", 1)
+        if len(parts) >= 2:
+            out.append((parts[0], parts[1]))
+    return out[:12]
 

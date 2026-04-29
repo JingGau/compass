@@ -30,6 +30,7 @@ from compass_core.runtime import (
     plan_action,
     record_action_result,
     record_change,
+    record_reflection_answer,
     reopen_session,
     start_session,
 )
@@ -157,6 +158,13 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="该证据对应的真实事件时间，用于 timeline",
     )
+    evidence_add.add_argument(
+        "--change",
+        action="append",
+        default=[],
+        dest="change_ids",
+        help="将该证据关联到一个已登记的变更（如 C1）；可重复传，用于 timeline 高亮变更→证据连线",
+    )
     evidence_add.add_argument("--json", action="store_true", dest="json_output")
     evidence_add.set_defaults(handler=handle_evidence_add)
 
@@ -223,6 +231,33 @@ def build_parser() -> argparse.ArgumentParser:
     timeline_p.add_argument("--json", action="store_true", dest="json_output")
     timeline_p.set_defaults(handler=handle_timeline)
 
+    reflect = subparsers.add_parser(
+        "reflect",
+        help="在 next 触发的根因反思三问之后，落盘自己的回答，便于报告留痕",
+    )
+    reflect_sub = reflect.add_subparsers(dest="reflect_command", required=True)
+    reflect_answer = reflect_sub.add_parser(
+        "answer",
+        help="对根因反思三问中的一题给出回答；question 取值 1/2/3",
+    )
+    reflect_answer.add_argument(
+        "--state-file",
+        default=str(PROJECT_ROOT / "memory" / "session-state.yaml"),
+    )
+    reflect_answer.add_argument(
+        "--question",
+        required=True,
+        choices=("1", "2", "3"),
+        help="对应 next 输出的根因反思三问的索引：1/2/3",
+    )
+    reflect_answer.add_argument(
+        "--answer",
+        required=True,
+        help="一句话回答；落盘后会写入 state.flow.reflection_answers，并在 report 中渲染问答对",
+    )
+    reflect_answer.add_argument("--json", action="store_true", dest="json_output")
+    reflect_answer.set_defaults(handler=handle_reflect_answer)
+
     hypothesis = subparsers.add_parser("hypothesis", help="manage hypotheses derived from evidence and scene facts")
     hypothesis_sub = hypothesis.add_subparsers(dest="hypothesis_command", required=True)
     hypothesis_add = hypothesis_sub.add_parser("add", help="add or update a hypothesis with source facts/evidence")
@@ -235,6 +270,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--falsifiable",
         default=None,
         help="反证条件：如果 X 不成立，则该假设不成立。让结论可证伪。",
+    )
+    hypothesis_add.add_argument(
+        "--change",
+        action="append",
+        default=[],
+        dest="change_ids",
+        help="将该假设关联到一个已登记的变更（如 C1）；可重复传，明确变更→假设的因果。",
     )
     hypothesis_add.add_argument("--json", action="store_true", dest="json_output")
     hypothesis_add.set_defaults(handler=handle_hypothesis_add)
@@ -257,13 +299,33 @@ def build_parser() -> argparse.ArgumentParser:
         "--mitigation",
         action="append",
         default=[],
-        help="止血动作（短期降低影响），可重复传",
+        help="止血动作（短期降低影响），可重复传；纯文本即可",
     )
     conclude.add_argument(
         "--remediation",
         action="append",
         default=[],
-        help="根治动作（长期解决根因），可重复传",
+        help="根治动作（长期解决根因），可重复传；纯文本即可",
+    )
+    conclude.add_argument(
+        "--mitigation-item",
+        action="append",
+        default=[],
+        dest="mitigation_items",
+        help=(
+            "结构化止血项：key=value;key=value，支持的 key：desc/owner/due/url/status。"
+            "示例：desc=补发对账消息;owner=@op;due=2026-04-30;status=open"
+        ),
+    )
+    conclude.add_argument(
+        "--remediation-item",
+        action="append",
+        default=[],
+        dest="remediation_items",
+        help=(
+            "结构化根治项：key=value;key=value，支持的 key：desc/owner/due/url/status。"
+            "示例：desc=MQ 加幂等;owner=@team-mq;due=2026-05-15;url=https://jira/...;status=planned"
+        ),
     )
     conclude.add_argument(
         "--unsolved",
@@ -284,6 +346,41 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         dest="related_hypotheses",
         help="本结论引用的假设 id（H1/H2 ...），可重复",
+    )
+    conclude.add_argument(
+        "--tldr",
+        default="",
+        help="≤3 句的一段式摘要，给非技术决策者一眼看完",
+    )
+    conclude.add_argument(
+        "--severity",
+        default=None,
+        choices=("sev1", "sev2", "sev3", "sev4"),
+        help="严重等级；不填则按 blast_radius 启发式推荐",
+    )
+    conclude.add_argument(
+        "--detected-at",
+        dest="detected_at",
+        default=None,
+        help="发现时间（覆盖 start 时自动写入的 problem.detected_at）",
+    )
+    conclude.add_argument(
+        "--acknowledged-at",
+        dest="acknowledged_at",
+        default=None,
+        help="开始响应时间，用于计算 MTTD",
+    )
+    conclude.add_argument(
+        "--mitigated-at",
+        dest="mitigated_at",
+        default=None,
+        help="完成止血时间，用于计算 MTTM",
+    )
+    conclude.add_argument(
+        "--resolved-at",
+        dest="resolved_at",
+        default=None,
+        help="问题完全恢复时间；不填默认取 conclude 当下",
     )
     conclude.add_argument("--json", action="store_true", dest="json_output")
     conclude.set_defaults(handler=handle_conclude)
@@ -410,7 +507,7 @@ def build_parser() -> argparse.ArgumentParser:
     report = subparsers.add_parser("report", help="render investigation report from state")
     report.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
     report.add_argument("--format", choices=("markdown", "json"), default="markdown")
-    report.add_argument("--audience", choices=("technical", "business", "review"), default="technical")
+    report.add_argument("--audience", choices=("technical", "business", "review", "postmortem"), default="technical")
     report.set_defaults(handler=handle_report)
 
     return parser
@@ -581,6 +678,7 @@ def handle_evidence_add(args: argparse.Namespace) -> int:
             strength=args.strength,
             raw_ref=args.raw_ref,
             event_at=getattr(args, "event_at", None),
+            change_ids=getattr(args, "change_ids", None) or None,
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
@@ -652,6 +750,26 @@ def handle_timeline(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_reflect_answer(args: argparse.Namespace) -> int:
+    try:
+        state = record_reflection_answer(
+            args.state_file,
+            question_id=args.question,
+            answer=args.answer,
+        )
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    flow = state.get("flow") or {}
+    answers = flow.get("reflection_answers") or []
+    payload = {"ok": True, "reflection_answers": answers, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print(f"已记录反思 Q{args.question}：{args.answer}")
+        print(f"已落盘 {len(answers)} 条反思回答（report 中会渲染问答对）。")
+    return 0
+
+
 def handle_change_list(args: argparse.Namespace) -> int:
     state = read_or_init_state(args.state_file)
     changes = state.get("changes") or []
@@ -680,6 +798,7 @@ def handle_hypothesis_add(args: argparse.Namespace) -> int:
             source_facts=args.source_fact,
             source_evidence=args.source_evidence,
             falsifiable=getattr(args, "falsifiable", None),
+            change_ids=getattr(args, "change_ids", None) or None,
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
@@ -691,8 +810,57 @@ def handle_hypothesis_add(args: argparse.Namespace) -> int:
     return 0
 
 
+def _parse_action_item_kv(raw: str) -> dict[str, Any]:
+    """解析 desc=...;owner=...;due=...;url=...;status=... 形式为 dict。
+
+    - 分隔符容错：分号 ; 与逗号 , 都可作为字段分隔
+    - 别名：description/desc/d 都映射到 description
+    - 未知 key 进入 extra 字典，不阻塞
+    """
+
+    aliases = {
+        "desc": "description",
+        "description": "description",
+        "d": "description",
+        "owner": "owner",
+        "due": "due",
+        "url": "url",
+        "link": "url",
+        "status": "status",
+    }
+    out: dict[str, Any] = {}
+    for part in raw.replace(";", ",").split(","):
+        if "=" not in part:
+            continue
+        k, v = part.split("=", 1)
+        k_norm = aliases.get(k.strip().lower())
+        if not k_norm:
+            continue
+        out[k_norm] = v.strip()
+    if not out.get("description"):
+        out["description"] = raw.strip()
+    return out
+
+
+def _merge_action_items(plain: list[str] | None, structured: list[str] | None) -> list[Any]:
+    """合并纯文本 mitigation 与结构化 mitigation-item，保持插入顺序。"""
+
+    merged: list[Any] = list(plain or [])
+    for raw in structured or []:
+        merged.append(_parse_action_item_kv(raw))
+    return merged
+
+
 def handle_conclude(args: argparse.Namespace) -> int:
     try:
+        mitigation = _merge_action_items(
+            getattr(args, "mitigation", None),
+            getattr(args, "mitigation_items", None),
+        )
+        remediation = _merge_action_items(
+            getattr(args, "remediation", None),
+            getattr(args, "remediation_items", None),
+        )
         state = conclude_session(
             args.state_file,
             conclusion=args.conclusion,
@@ -709,11 +877,17 @@ def handle_conclude(args: argparse.Namespace) -> int:
                 "inference_chain": args.inference_chain or "",
             },
             next_actions=args.next_action,
-            mitigation=getattr(args, "mitigation", None),
-            remediation=getattr(args, "remediation", None),
+            mitigation=mitigation or None,
+            remediation=remediation or None,
             unsolved=getattr(args, "unsolved", None),
             pattern_scan=getattr(args, "pattern_scan", None),
             related_hypotheses=getattr(args, "related_hypotheses", None),
+            tldr=getattr(args, "tldr", None) or None,
+            severity=getattr(args, "severity", None),
+            detected_at=getattr(args, "detected_at", None),
+            acknowledged_at=getattr(args, "acknowledged_at", None),
+            mitigated_at=getattr(args, "mitigated_at", None),
+            resolved_at=getattr(args, "resolved_at", None),
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
@@ -721,10 +895,30 @@ def handle_conclude(args: argparse.Namespace) -> int:
     if args.json_output:
         print_json(payload)
     else:
-        print(f"结论：{state['conclusion']['summary']}")
-        print(f"可信度：{state['conclusion']['confidence']}")
-        print(f"证据：{', '.join(state['conclusion']['evidence'])}")
-        warnings = state["conclusion"].get("quality_warnings") or []
+        conc = state["conclusion"]
+        sev = conc.get("severity", "")
+        sev_icon = {"sev1": "🔴", "sev2": "🟠", "sev3": "🟡", "sev4": "🟢"}.get(sev, "⚪")
+        print(f"结论：{conc['summary']}")
+        if conc.get("tldr"):
+            print(f"TL;DR：{conc['tldr']}")
+        if sev:
+            print(f"严重等级：{sev_icon} {sev.upper()}")
+        timing = conc.get("timing") or {}
+        mttr = timing.get("mttr_minutes")
+        mttd = timing.get("mttd_minutes")
+        mttm = timing.get("mttm_minutes")
+        if any(v is not None for v in (mttd, mttm, mttr)):
+            parts: list[str] = []
+            if mttd is not None:
+                parts.append(f"MTTD={mttd}m")
+            if mttm is not None:
+                parts.append(f"MTTM={mttm}m")
+            if mttr is not None:
+                parts.append(f"MTTR={mttr}m")
+            print(f"时序：{' / '.join(parts)}")
+        print(f"可信度：{conc['confidence']}")
+        print(f"证据：{', '.join(conc['evidence'])}")
+        warnings = conc.get("quality_warnings") or []
         if warnings:
             print()
             print("⚠️  结论质量提示（不阻塞，但建议处理）：")

@@ -32,10 +32,12 @@ Do not use this skill for:
 4. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
 5. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
 6. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
-7. 当证据初步成型时，`compass next` 会主动输出【根因反思三问】（这是现象还是根因 / 为什么之前没出问题 / 同类还有谁），必须实际过一遍再决定是否 `conclude`，不得直接跳到结论。
+7. 当证据初步成型时，`compass next` 会主动输出【根因反思三问】（这是现象还是根因 / 为什么之前没出问题 / 同类还有谁），必须实际过一遍再决定是否 `conclude`，不得直接跳到结论；过完三问后必须用 `compass reflect answer --question 1|2|3 --answer "..."` 把回答落盘，方便复盘。
 8. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
+   - **强烈建议**同时提供：`--tldr "<≤3 句执行摘要>"`、`--severity sev1|sev2|sev3|sev4`、以及四个时间戳 `--detected-at / --acknowledged-at / --mitigated-at / --resolved-at`；这些字段直接驱动报告头部的 TL;DR 卡片与 MTTD/MTTM/MTTR 时序表。
+   - 结构化的根治项请优先用 `--remediation-item "desc=...;owner=@team-x;due=2026-05-15;url=https://...;status=planned"` 形式，无 Owner 的根治项会触发 `REMEDIATION_NO_OWNER` 警告。
 9. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
-10. 最终报告必须优先由 `report --audience technical|business|review` 生成。报告头部会自动渲染 timeline / 变更窗口 / 适用知识 / 止血与根治 / 未解之谜 / 同类扫描 / 结论质量提示。
+10. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
 11. 报告后必须主动询问用户是否保留本次最终查询策略；用户确认后用 `strategy keep` 沉淀，用户否认后用 `strategy discard` 记录原因。
 12. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
 
@@ -59,6 +61,9 @@ python3 -m compass_cli action complete --action-id A1 \
   --summary "<证据摘要>" \
   --finding "<关键发现>" \
   --supports H1
+python3 -m compass_cli reflect answer --question 1 --answer "<对'是现象还是根因'的判断>"
+python3 -m compass_cli reflect answer --question 2 --answer "<对'为什么之前没出'的判断>"
+python3 -m compass_cli reflect answer --question 3 --answer "<对'同类还有谁'的判断>"
 python3 -m compass_cli conclude --conclusion "<结论>" --evidence E1 --confidence high \
   --what "<发生了什么>" \
   --where "<服务/接口/类方法/链路位置>" \
@@ -68,12 +73,19 @@ python3 -m compass_cli conclude --conclusion "<结论>" --evidence E1 --confiden
   --blast-radius "<量化影响范围>" \
   --how "<传播链路>" \
   --inference-chain "<连续因果推断链>" \
+  --tldr "<≤3 句执行摘要，给非技术决策者一眼看完>" \
+  --severity sev2 \
+  --detected-at "<yyyy-mm-ddTHH:MM:SS+08:00>" \
+  --acknowledged-at "<yyyy-mm-ddTHH:MM:SS+08:00>" \
+  --mitigated-at "<yyyy-mm-ddTHH:MM:SS+08:00>" \
+  --resolved-at "<yyyy-mm-ddTHH:MM:SS+08:00>" \
   --mitigation "<短期止血动作>" \
-  --remediation "<长期根治动作>" \
+  --remediation-item "desc=<长期根治动作>;owner=@team-x;due=2026-05-15;url=https://jira/...;status=planned" \
   --pattern-scan "<同类扫描方向>" \
   --unsolved "<本次未解之谜>" \
   --hypothesis H1
 python3 -m compass_cli report --audience technical
+python3 -m compass_cli report --audience postmortem
 python3 -m compass_cli report --audience review
 python3 -m compass_cli strategy keep --note "<为什么这次查法值得保留>"
 # 或

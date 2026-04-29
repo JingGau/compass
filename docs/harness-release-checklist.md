@@ -23,8 +23,15 @@
 - `compass kb learn` 写入 `memory/knowledge.yaml` 后 `compass kb suggest --query ...` 能召回；`compass start` 后 `state.applicable_knowledge` 字段非空时 CLI 输出"适用知识"提示
 - `compass change record` 写入后 `compass timeline` 能渲染时间线；report technical 头部能看到时间线 + 变更窗口
 - 证据已具备一定深度时 `compass next` 输出"反思三问"
-- `compass conclude` 在 confidence=high 但缺强证据 / 缺 mitigation / 缺 remediation / 支持假设缺 falsifiable 时返回 quality_warnings；report 渲染"结论质量提示"段
+- `compass conclude` 在 confidence=high 但缺强证据 / 缺 mitigation / 缺 remediation / 支持假设缺 falsifiable / 根治项缺 owner / TL;DR 超过 3 句 时返回 quality_warnings；report 渲染"结论质量提示"段
 - `scene fact --category diff` 缺对比词时被运行时拒绝
+- `compass conclude --tldr ... --severity ... --detected-at ... --acknowledged-at ... --mitigated-at ... --resolved-at ...` 后 report 头部能看到 TL;DR 卡片 + 严重等级标签 + MTTD/MTTM/MTTR 时序表（MTTM = acknowledged → mitigated）
+- `compass conclude --remediation-item "desc=...;owner=@x;due=...;url=...;status=..."` 后 report"止血与根治"段渲染为带 Owner/Due/状态/链接的表
+- runtime 自动把 `inference_chain` 拆为 `inference_steps`，report 渲染为有序步骤表（步骤 # / 推断 / 引用证据）
+- prod 环境 `action plan --track sql` 后 `gate.explain_text` 落盘了 EXPLAIN 原文；report Action Card 用 fenced 代码块显示原文（可一键复制）
+- `compass evidence add --change C1` 与 `compass hypothesis add --change C1` 在引用不存在的变更时会被 runtime 拒绝；timeline 表会用 ⤴ 标识"变更→证据"连线
+- `compass reflect answer --question 1|2|3 --answer "..."` 落盘后 report 渲染"根因反思（自我盘问）"问答段
+- `report --audience postmortem` 输出事故复盘十段式 Markdown；`state.evidence_graph` 中最长有向简单路径≥3 条边时 `compass next` JSON 含 `bisect_hint`（每会话至多一次）
 
 ## 4. 安全与门禁
 

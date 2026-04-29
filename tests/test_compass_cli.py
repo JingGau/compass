@@ -1920,7 +1920,7 @@ def test_hypothesis_requires_fact_or_evidence_source(tmp_path: Path) -> None:
     )
 
     assert blocked.returncode == 1
-    assert "假设必须引用至少一个 scene fact 或 evidence" in json.loads(blocked.stdout)["error"]
+    assert "假设必须引用至少一个 scene fact / evidence / change" in json.loads(blocked.stdout)["error"]
 
 
 def test_next_guides_scene_discovery_before_hypothesis_validation(tmp_path: Path) -> None:
@@ -2884,8 +2884,8 @@ def test_conclude_with_mitigation_and_remediation_persists(tmp_path: Path) -> No
     assert res.returncode == 0, res.stderr
     payload = json.loads(res.stdout)
     conc = payload["state"]["conclusion"]
-    assert conc["mitigation"] == ["立即补发对账消息"]
-    assert conc["remediation"] == ["MQ 增加幂等并接入告警"]
+    assert conc["mitigation"][0]["description"] == "立即补发对账消息"
+    assert conc["remediation"][0]["description"] == "MQ 增加幂等并接入告警"
     assert conc["unsolved"] == ["为何同时段其他订单未受影响"]
     assert conc["pattern_scan"] == ["充电订单同链路是否也丢消息"]
     codes = {w["code"] for w in conc["quality_warnings"]}
@@ -2933,3 +2933,418 @@ def test_next_emits_reflection_questions_when_evidence_is_strong(tmp_path: Path)
     next_info = payload["next"]
     assert "反思" in next_info["message"]
     assert len(next_info.get("reflection") or []) == 3
+
+
+def _setup_minimal_session(tmp_path: Path) -> Path:
+    """快速构造一个进入 evidence_collecting 阶段、含 1 条强证据的会话。"""
+
+    state_file = tmp_path / "session.json"
+    run_cli("start", "支付回调丢失导致订单不到账", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "trigger",
+        "--value",
+        "支付成功后未推进订单",
+        "--source",
+        "用户反馈",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "支付回调日志缺失",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+    )
+    return state_file
+
+
+def test_conclude_renders_tldr_severity_and_mttr(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "MQ 丢消息导致回调未触发，订单未推进",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "high",
+        "--what",
+        "支付回调链路丢消息",
+        "--where",
+        "order-server consume queue",
+        "--when",
+        "2026-04-29 13:30 前后",
+        "--why-technical",
+        "MQ 节点 GC 抖动期间消息未正确 ACK",
+        "--why-business",
+        "用户支付成功后短时间内订单未推进",
+        "--blast-radius",
+        "影响 50 名用户的订单状态推进",
+        "--how",
+        "支付回调 → MQ 丢失 → 订单未推进 → 用户未到账",
+        "--inference-chain",
+        "支付回调日志 E1 → 因 MQ 丢失 → 触发余额为 0",
+        "--mitigation",
+        "立即补发对账消息",
+        "--remediation-item",
+        "desc=MQ 加幂等并接入告警;owner=@team-mq;due=2026-05-15;status=planned",
+        "--tldr",
+        "MQ 丢消息致 50 名用户订单未推进，已补发对账消息止血。",
+        "--severity",
+        "sev2",
+        "--detected-at",
+        "2026-04-29T13:30:00+08:00",
+        "--acknowledged-at",
+        "2026-04-29T13:35:00+08:00",
+        "--mitigated-at",
+        "2026-04-29T13:50:00+08:00",
+        "--resolved-at",
+        "2026-04-29T15:30:00+08:00",
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    conc = json.loads(res.stdout)["state"]["conclusion"]
+    assert conc["tldr"].startswith("MQ 丢消息")
+    assert conc["severity"] == "sev2"
+    timing = conc["timing"]
+    assert timing["mttd_minutes"] == 5
+    assert timing["mttm_minutes"] == 15
+    assert timing["mttr_minutes"] == 120
+    assert conc["remediation"][0]["owner"] == "@team-mq"
+    assert conc["remediation"][0]["due"] == "2026-05-15"
+    rep = run_cli("report", "--state-file", str(state_file), "--audience", "technical")
+    assert rep.returncode == 0
+    out = rep.stdout
+    assert "TL;DR" in out
+    assert "MTTR" in out
+    assert "🟠 SEV2" in out
+
+
+def test_conclude_warns_on_too_long_tldr(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    long_tldr = "句子一。句子二。句子三！句子四？"
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "MQ 丢消息致回调未触发，订单未推进",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "medium",
+        "--what",
+        "支付回调消息丢失",
+        "--where",
+        "order-server consume queue",
+        "--when",
+        "2026-04-29 13:30 前后",
+        "--why-technical",
+        "MQ 节点 GC 抖动期间消息未正确 ACK",
+        "--why-business",
+        "用户支付成功后订单未推进",
+        "--blast-radius",
+        "影响 50 名用户的订单状态推进",
+        "--how",
+        "支付回调 → MQ 丢失 → 订单未推进",
+        "--inference-chain",
+        "支付回调日志 E1 → MQ 丢失 → 订单未推进",
+        "--mitigation",
+        "立即补发对账消息",
+        "--remediation-item",
+        "desc=MQ 加幂等;owner=@team-mq",
+        "--tldr",
+        long_tldr,
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    codes = {w["code"] for w in json.loads(res.stdout)["state"]["conclusion"]["quality_warnings"]}
+    assert "TLDR_TOO_LONG" in codes
+
+
+def test_evidence_change_link_and_timeline(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    run_cli(
+        "change",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--type",
+        "deploy",
+        "--target",
+        "order-server@v1.2.3",
+        "--description",
+        "上线 v1.2.3 包含 MQ 客户端升级",
+        "--event-at",
+        "2026-04-29T13:00:00+08:00",
+    )
+    res = run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "上线后开始出现回调日志缺失",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+        "--event-at",
+        "2026-04-29T13:30:00+08:00",
+        "--change",
+        "C1",
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    ev = json.loads(res.stdout)["evidence"]
+    assert ev["change_ids"] == ["C1"]
+
+    tl = run_cli("timeline", "--state-file", str(state_file), "--json")
+    assert tl.returncode == 0
+    timeline = json.loads(tl.stdout)["timeline"]
+    evidence_entry = next(e for e in timeline if e["kind"] == "evidence")
+    assert evidence_entry["related_changes"] == ["C1"]
+
+
+def test_evidence_change_link_rejects_unknown_change(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    res = run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "无效的关联",
+        "--kind",
+        "log",
+        "--strength",
+        "medium",
+        "--change",
+        "C99",
+        "--json",
+    )
+    assert res.returncode == 1
+    assert "引用的变更不存在" in json.loads(res.stdout)["error"]
+
+
+def test_reflect_answer_persists_and_renders_in_report(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    res = run_cli(
+        "reflect",
+        "answer",
+        "--state-file",
+        str(state_file),
+        "--question",
+        "1",
+        "--answer",
+        "这是现象，进一步往下挖发现 MQ 节点 GC 是更根因",
+        "--json",
+    )
+    assert res.returncode == 0, res.stderr
+    answers = json.loads(res.stdout)["reflection_answers"]
+    assert answers[0]["question_id"] == "1"
+
+    run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "MQ GC 抖动导致回调未 ACK",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "medium",
+        "--what",
+        "支付回调消息丢失",
+        "--where",
+        "order-server consume queue",
+        "--when",
+        "2026-04-29 13:30 前后",
+        "--why-technical",
+        "MQ 节点 GC 抖动期间消息未正确 ACK",
+        "--why-business",
+        "用户在支付成功后订单未推进",
+        "--blast-radius",
+        "影响 50 名用户的订单状态推进",
+        "--how",
+        "支付回调 → MQ 丢失 → 订单未推进",
+        "--inference-chain",
+        "E1 → MQ 丢失 → 订单未推进",
+        "--mitigation",
+        "立即补发对账消息",
+        "--remediation",
+        "MQ 加幂等",
+    )
+    rep = run_cli("report", "--state-file", str(state_file), "--audience", "technical")
+    assert rep.returncode == 0
+    assert "根因反思（自我盘问）" in rep.stdout
+    assert "现象" in rep.stdout
+
+
+def test_action_card_renders_explain_text_block(tmp_path: Path) -> None:
+    """模拟 action_history 含 explain_text 时，Action Card 用 fenced 代码块独立渲染。"""
+
+    state_file = _setup_minimal_session(tmp_path)
+
+    import yaml as _yaml
+
+    with state_file.open("r", encoding="utf-8") as f:
+        state = _yaml.safe_load(f) or {}
+    state.setdefault("action_history", []).append(
+        {
+            "action_id": "demo-sql",
+            "track": "sql",
+            "source": "manual",
+            "input": {"sql": "select 1", "explain_text": "id|select_type|table\n1|SIMPLE|t_user"},
+            "gate": {"type": "sql", "status": "passed", "risk": "low", "explain_text": "id|select_type|table\n1|SIMPLE|t_user"},
+            "output": {"summary": "EXPLAIN 通过", "findings": [], "leads": {}, "elapsed_ms": 10, "evidence_id": "E1"},
+        }
+    )
+    state.setdefault("evidence", [])
+    if not any(e.get("id") == "E1" for e in state["evidence"]):
+        state["evidence"].append({"id": "E1", "source": "sls", "summary": "占位证据", "kind": "log", "strength": "medium", "created_at": "2026-04-29T13:30:00+08:00"})
+    with state_file.open("w", encoding="utf-8") as f:
+        _yaml.safe_dump(state, f, allow_unicode=True)
+
+    rep = run_cli("report", "--state-file", str(state_file), "--audience", "technical")
+    assert rep.returncode == 0, rep.stderr
+    assert "EXPLAIN 原文（可直接复制回贴）" in rep.stdout
+    assert "```text" in rep.stdout
+    assert "SIMPLE|t_user" in rep.stdout
+
+
+def test_report_postmortem_audience_renders_section_headings(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "MQ 丢消息导致订单未推进",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "medium",
+        "--what",
+        "支付回调消息丢失",
+        "--where",
+        "order-server consume queue",
+        "--when",
+        "2026-04-29 13:30 前后",
+        "--why-technical",
+        "MQ 未正确 ACK",
+        "--why-business",
+        "用户支付后订单未推进",
+        "--blast-radius",
+        "影响 50 名用户",
+        "--how",
+        "支付回调 → MQ 丢失 → 订单未推进",
+        "--inference-chain",
+        "E1 → MQ 丢失 → 订单未推进",
+        "--mitigation",
+        "补发对账消息",
+        "--remediation-item",
+        "desc=MQ 加固;owner=@team-mq;due=2026-06-01;status=planned",
+        "--tldr",
+        "简述一句。两句。第三句以内。",
+        "--severity",
+        "sev3",
+        "--detected-at",
+        "2026-04-29T13:30:00+08:00",
+        "--acknowledged-at",
+        "2026-04-29T13:40:00+08:00",
+    )
+    out = run_cli("report", "--audience", "postmortem", "--state-file", str(state_file))
+    assert out.returncode == 0, out.stderr
+    text = out.stdout
+    assert "Postmortem · 事故复盘" in text
+    assert "## 一、" in text and "Executive Summary" in text
+    assert "## 二、" in text and "Impact" in text
+    assert "## 九、" in text and "References" in text
+    assert "## 十、" in text and "Timeline" in text
+
+
+def test_next_emits_bisect_hint_once_when_evidence_graph_chain_deep(tmp_path: Path) -> None:
+    import yaml as _yaml
+
+    state_file = tmp_path / "session.json"
+    run_cli("start", "支付订单不同步问题", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "entrypoint",
+        "--name",
+        "api",
+        "--value",
+        "/pay/callback",
+        "--source",
+        "用户反馈",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "回调日志缺失样本",
+        "--kind",
+        "log",
+        "--strength",
+        "medium",
+    )
+    with state_file.open("r", encoding="utf-8") as f:
+        st = _yaml.safe_load(f) or {}
+    st.setdefault("flow", {})["reflection_shown"] = True
+    st["evidence_graph"] = {
+        "nodes": [
+            {"id": "page:A", "type": "page", "value": "A"},
+            {"id": "api:B", "type": "api", "value": "B"},
+            {"id": "method:C", "type": "method", "value": "C"},
+            {"id": "table:D", "type": "table", "value": "D"},
+        ],
+        "edges": [
+            {"from": "page:A", "to": "api:B", "relation": "calls"},
+            {"from": "api:B", "to": "method:C", "relation": "handled_by"},
+            {"from": "method:C", "to": "table:D", "relation": "reads"},
+        ],
+    }
+    with state_file.open("w", encoding="utf-8") as f:
+        _yaml.safe_dump(st, f, allow_unicode=True)
+
+    r1 = run_cli("next", "--state-file", str(state_file), "--json")
+    assert r1.returncode == 0, r1.stderr
+    n1 = json.loads(r1.stdout)["next"]
+    bh = n1.get("bisect_hint") or {}
+    assert bh.get("triggered") is True
+    assert bh.get("max_chain_edges", 0) >= 3
+
+    r2 = run_cli("next", "--state-file", str(state_file), "--json")
+    assert r2.returncode == 0
+    n2 = json.loads(r2.stdout)["next"]
+    assert "bisect_hint" not in n2

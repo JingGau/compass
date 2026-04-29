@@ -42,6 +42,10 @@
 
 通过五问后，再按下文格式输出结论卡片。
 
+> 五问中第 1、2、4 题与 `compass next` 触发的"根因反思三问"一一对应；
+> 务必用 `compass reflect answer --question 1|2|3 --answer "..."` 把答案落盘，
+> `report` 中会自动渲染问答对到「根因反思（自我盘问）」段，让评审看得见你思考过。
+
 ---
 
 ## 输出结构
@@ -86,6 +90,25 @@
 ```
 🟡 待验证假设：___
 ```
+
+---
+
+### 1.1.5 TL;DR + 严重等级 + MTTR（强烈推荐，决策者一眼看完）
+
+> 给非技术决策者 / Oncall / 复盘评审使用。`report` 会自动用这段渲染头部 TL;DR 卡片
+> 与 MTTD/MTTM/MTTR 时序表，因此最好通过 `conclude` 的对应参数落盘。
+
+| 字段 | 命令参数 | 要求 |
+|------|----------|------|
+| TL;DR | `--tldr "<≤3 句>"` | 一段话讲清"故障是什么、影响多大、当前状态"。超 3 句会触发 `TLDR_TOO_LONG` 警告 |
+| 严重等级 | `--severity sev1\|sev2\|sev3\|sev4` | 不传则按 blast_radius 启发式推荐；🔴 SEV1=资损/全站不可用，🟠 SEV2=核心功能受损，🟡 SEV3=部分用户/特定场景，🟢 SEV4=轻度异常 |
+| 发现时间 | `--detected-at "<yyyy-mm-ddTHH:MM:SS+08:00>"` | 故障被监控/用户/oncall 发现的时间，默认 = `start_session` 时间 |
+| 响应时间 | `--acknowledged-at "..."` | oncall 介入响应的时间；与 detected 之差 = MTTD |
+| 止血时间 | `--mitigated-at "..."` | 止血动作生效、用户感知恢复的时间；与 acknowledged 之差 = MTTM |
+| 解决时间 | `--resolved-at "..."` | 完全恢复、根治动作落地的时间；与 detected 之差 = MTTR |
+
+如果 4 个时间戳缺失，不会阻塞 conclude，但报告里的时序表会显示 "—"，
+评审时会被追问"为什么没记录响应时间"。
 
 ---
 

@@ -336,12 +336,38 @@ python3 -m compass_cli change record --type deploy --target order-server@v1.2.3 
 # 故障时间线（合并 changes / scene_facts / evidence / actions 的 event_at）
 python3 -m compass_cli timeline
 
+# 把证据/假设关联到一笔已登记的变更（timeline 表会用 ⤴ 标识"变更→证据"连线）
+python3 -m compass_cli evidence add --source sls --summary "上线后开始出现回调日志缺失" \
+  --kind log --strength strong --event-at "2026-04-29 13:30" --change C1
+
+# 落盘根因反思三问的答案（next 触发反思后写）
+python3 -m compass_cli reflect answer --question 1 \
+  --answer "这只是现象，更深一步是 MQ GC 抖动导致 ACK 丢失"
+
+# 输出带 TL;DR / 严重等级 / MTTD-MTTR / 结构化 Action Items 的结论
+python3 -m compass_cli conclude \
+  --conclusion "MQ 节点 GC 抖动导致回调未 ACK，订单未推进" \
+  --evidence E1 --confidence high \
+  --tldr "MQ GC 抖动致 50 名用户订单未推进，已止血。" \
+  --severity sev2 \
+  --detected-at "2026-04-29T13:30:00+08:00" \
+  --acknowledged-at "2026-04-29T13:35:00+08:00" \
+  --mitigated-at "2026-04-29T13:50:00+08:00" \
+  --resolved-at "2026-04-29T15:30:00+08:00" \
+  --mitigation "立即补发对账消息" \
+  --remediation-item "desc=MQ 加幂等并接入告警;owner=@team-mq;due=2026-05-15;status=planned" \
+  --hypothesis H1
+  # 其他必填见 conclude --help（what/where/when/why/how/inference-chain）
+
 # 查看当前状态
 python3 -m compass_cli state show --json
 
 # 生成报告
 python3 -m compass_cli report --audience technical
+python3 -m compass_cli report --audience postmortem
 ```
+
+`--audience postmortem` 输出标准事故复盘十段式 Markdown（概述 / 影响 / 侦测 / 响应 / 恢复 / 根因 / 行动项 / 教训 / 引用证据 / 时间线），适合会议评审与留档。
 
 ## v4 增强能力（专业化）
 
@@ -358,6 +384,15 @@ python3 -m compass_cli report --audience technical
 | 同类扫描 | `conclude --pattern-scan "<相邻入口/数据/链路>"` | 根因定位后必须列出同类影响面，避免"只解一个、漏一片" |
 | 关联假设 | `conclude --hypothesis H1 --hypothesis H2` | 让结论显式引用支持它的假设 |
 | 结论质量提示 | conclude 输出 `quality_warnings`，report 渲染表格 | confidence=high 必须有强证据；推断链需有因果连接词；缺 mitigation/remediation/反证条件均会警告 |
+| TL;DR + 严重等级 | `conclude --tldr "<≤3 句>" --severity sev1\|sev2\|sev3\|sev4` | 报告头部生成 TL;DR 卡片，决策者一眼可看；不传 severity 时按 blast_radius 启发式推荐 |
+| MTTD / MTTM / MTTR | `conclude --detected-at / --acknowledged-at / --mitigated-at / --resolved-at` | 报告渲染时序表（发现→响应→止血→恢复），落盘 timing.mttd_minutes/mttm_minutes/mttr_minutes |
+| Action Items 结构化 | `conclude --mitigation-item "desc=...;owner=@x;due=2026-05-15;url=...;status=open"` | 报告渲染为表格（动作/Owner/Due/状态/链接），无 Owner 的根治项会触发 REMEDIATION_NO_OWNER 软警告 |
+| 推断链拆段 | runtime 自动按 →/因为-所以/从…到…使… 把 inference_chain 拆为有序步骤 | 报告渲染为带"步骤号 → 推断 → 引用证据"的表，便于评审 |
+| EXPLAIN 原文回贴 | track sql 时 input.explain_text 自动同步到 gate.explain_text，Action Card fenced 代码块独立显示 | 复盘可一键复制 EXPLAIN 原文，避免"风险等级靠口述" |
+| 变更↔证据连线 | `evidence add --change C1` / `hypothesis add --change C1` | 在 timeline 表用 ⤴ 标识"该证据/假设由哪笔变更引入" |
+| 反思答案落盘 | `compass reflect answer --question 1\|2\|3 --answer "..."` | 把 next 的"根因反思三问"答案落盘到 state.flow.reflection_answers，report 渲染问答对 |
+| Postmortem 事故复盘 | `report --audience postmortem` | 输出十段式复盘：概述/影响/侦测/响应/恢复/根因/行动项/教训/引用/时间线 |
+| 证据链二分定位提示 | `compass next`（evidence_graph 最长简单路径≥3 条边，每会话至多提示一次） | 在 message / JSON `bisect_hint` 中建议于链中间层两侧补对照证据，二分缩小根因范围 |
 
 ## Obsidian 知识库
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 
 from tools.action_cards import ActionResult
-from tools.evidence_graph import EvidenceGraph
+from tools.evidence_graph import EvidenceGraph, max_simple_path_length_edges
 
 
 class EvidenceGraphTest(unittest.TestCase):
@@ -63,6 +63,14 @@ class EvidenceGraphTest(unittest.TestCase):
         self.assertIn("method:OnlineRechargeOrRefundController#queryOnlineRechargeForPage", node_ids)
         self.assertIn("table:finance_d_t_third_pay_info", node_ids)
         self.assertIn("trace:trace-1", node_ids)
+
+    def test_max_simple_path_returns_edge_count_longest_simple_path(self) -> None:
+        graph = EvidenceGraph()
+        graph.link("page", "Dashboard", "api", "/api/x", "calls")
+        graph.link("api", "/api/x", "method", "Svc#handle", "handled_by")
+        graph.link("method", "Svc#handle", "table", "t_orders", "reads")
+
+        self.assertEqual(max_simple_path_length_edges(graph.to_dict()), 3)
 
 
 if __name__ == "__main__":

@@ -17,7 +17,134 @@ def render_markdown_report(state: dict[str, Any], audience: str = "technical") -
         return render_business_report(state)
     if audience == "review":
         return render_review_report(state)
+    if audience == "postmortem":
+        return render_postmortem_report(state)
     return render_technical_report(state)
+
+
+def render_postmortem_report(state: dict[str, Any]) -> str:
+    """事后复盘（postmortem）十段式结构，适合事故评审与组织级留档。"""
+
+    conclusion = state.get("conclusion") or {}
+    details = conclusion.get("details") or {}
+    probl = state.get("problem") or {}
+    timing = conclusion.get("timing") or {}
+
+    lines: list[str] = [
+        "# Postmortem · 事故复盘报告",
+        "",
+        f"- **session_id**：`{mask_text(state.get('session_id', 'unknown'))}`",
+    ]
+    if probl.get("standard"):
+        lines.append(f"- **标准化问题**：{mask_text(str(probl.get('standard', '')))}")
+
+    lines.extend(["", "## 一、Executive Summary（概述）", ""])
+    if conclusion.get("tldr"):
+        lines.append(f"> **TL;DR**：{mask_text(str(conclusion.get('tldr', '')))}")
+        lines.append("")
+    sev = str(conclusion.get("severity") or "").strip()
+    if sev:
+        sev_icon = {"sev1": "🔴", "sev2": "🟠", "sev3": "🟡", "sev4": "🟢"}.get(sev.lower(), "")
+        lines.append(f"**严重等级**：{sev_icon} {mask_text(sev.upper())}")
+        lines.append("")
+    if conclusion.get("summary"):
+        lines.append(f"**根因结论**：{mask_text(conclusion.get('summary', ''))}")
+    else:
+        lines.append("*尚未输出结构化 conclude，建议补全后再做复盘评审。*")
+
+    lines.extend(["", "## 二、Impact（影响面）", "", mask_text(str(details.get("blast_radius") or "（未量化）")), ""])
+
+    lines.extend(["## 三、Detection（发现与侦测）", ""])
+    det_lines: list[str] = []
+    if timing.get("detected_at"):
+        det_lines.append(f"- **发现时间（timing.detected_at）**：{mask_text(str(timing['detected_at']))}")
+    elif probl.get("detected_at"):
+        det_lines.append(f"- **发现时间（problem.detected_at）**：{mask_text(str(probl.get('detected_at')))}")
+    det_lines.append(f"- **When / What**：{mask_text(str(details.get('when', '')))} · {mask_text(str(details.get('what', '')))}")
+    lines.extend(det_lines)
+    lines.extend(_render_applicable_knowledge_section(state))
+
+    lines.extend(["## 四、Response（响应与接手）", ""])
+    ack_at = timing.get("acknowledged_at")
+    lines.append(f"- **开始响应时间**：{mask_text(str(ack_at)) if ack_at else '（未记录）'}")
+    if timing.get("mttd_minutes") is not None:
+        lines.append(f"- **MTTD（发现→响应）**：约 {mask_text(str(timing['mttd_minutes']))} 分钟")
+    mitig = conclusion.get("mitigation") or []
+    if mitig:
+        lines.extend(["", "### 止血动作（Mitigation）", ""])
+        lines.extend(_render_action_items_table(mitig))
+    else:
+        lines.extend(["", "*未记录 mitigation*", ""])
+
+    lines.extend(["## 五、Recovery（恢复与根治）", ""])
+    mit_at = timing.get("mitigated_at")
+    res_at = timing.get("resolved_at")
+    lines.append(f"- **止血见效时间**：{mask_text(str(mit_at)) if mit_at else '（未记录）'}")
+    lines.append(f"- **完全恢复时间**：{mask_text(str(res_at)) if res_at else '（未记录）'}")
+    if timing.get("mttm_minutes") is not None:
+        lines.append(f"- **MTTM（响应→止血）**：约 {mask_text(str(timing['mttm_minutes']))} 分钟")
+    if timing.get("mttr_minutes") is not None:
+        lines.append(f"- **MTTR（发现→解决）**：约 {mask_text(str(timing['mttr_minutes']))} 分钟")
+    rem = conclusion.get("remediation") or []
+    if rem:
+        lines.extend(["", "### 根治动作（Remediation）", ""])
+        lines.extend(_render_action_items_table(rem))
+    lines.append("")
+
+    lines.extend(["## 六、Root Cause（根因）", ""])
+    lines.extend(
+        [
+            "| 维度 | 内容 |",
+            "|------|------|",
+            f"| Why — 技术 | {mask_text(str(details.get('why_technical', '')))} |",
+            f"| Why — 业务触发 | {mask_text(str(details.get('why_business', '')))} |",
+            f"| Where | {mask_text(str(details.get('where', '')))} |",
+            f"| How（传播链） | {mask_text(str(details.get('how', '')))} |",
+            "",
+        ]
+    )
+    lines.extend(_render_inference_chain(conclusion, details))
+
+    lines.extend(["## 七、Action Items（行动项汇总）", ""])
+    lines.extend(_render_mitigation_remediation(conclusion))
+    lines.extend(_render_unsolved_pattern(conclusion))
+
+    lines.extend(["## 八、Lessons Learned（经验与反思）", ""])
+    answers = (state.get("flow") or {}).get("reflection_answers") or []
+    if answers:
+        for item in answers:
+            qid = item.get("question_id", "")
+            prompt = item.get("prompt", "")
+            ans = item.get("answer", "")
+            lines.extend([f"- **Q{mask_text(str(qid))}**：{mask_text(prompt)}", f"  - {mask_text(ans)}", ""])
+    else:
+        lines.append("- （未调用 `reflect answer`，可用书面补充本次教训与流程改进要点）")
+    lines.extend(_render_quality_warnings(conclusion))
+
+    lines.extend(["## 九、References（引用与证据）", ""])
+    ev_ref = conclusion.get("evidence") or []
+    if ev_ref:
+        lines.append("结论引用：`" + "`, `".join(mask_text(str(x)) for x in ev_ref) + "`")
+        lines.append("")
+    evidence_rows = state.get("evidence") or []
+    if evidence_rows:
+        lines.extend(["| ID | 来源 | 摘要 | kind/strength |", "|----|------|------|---------------|"])
+        for item in evidence_rows:
+            lines.append(
+                f"| {mask_text(str(item.get('id', '')))} | {mask_text(str(item.get('source', '')))} | "
+                f"{mask_text(str(item.get('summary', '')))} | {_evidence_quality(item)} |"
+            )
+        lines.append("")
+
+    tl = _render_timeline_section(state, heading="## 十、Timeline（时间线）")
+    if tl:
+        lines.extend(tl)
+    else:
+        lines.extend(["", "## 十、Timeline（时间线）", "", "*暂无带 event_at 的事件；建议为 change / evidence 补 event_at*", ""])
+
+    lines.extend(_render_changes_section(state))
+    lines.extend(_render_strategy_review(state))
+    return "\n".join(lines) + "\n"
 
 
 def render_technical_report(state: dict[str, Any]) -> str:
@@ -30,6 +157,8 @@ def render_technical_report(state: dict[str, Any]) -> str:
     details = conclusion.get("details") or {}
     conclusion_history = state.get("conclusion_history") or []
     if conclusion:
+        lines.extend(_render_tldr_card(conclusion))
+        lines.extend(_render_timing_section(conclusion))
         lines.extend(
             [
                 "",
@@ -153,7 +282,8 @@ def render_technical_report(state: dict[str, Any]) -> str:
         lines.append("暂无结构化 action 记录。")
 
     if conclusion:
-        lines.extend(["", "## 推断链", "", mask_text(details.get("inference_chain", ""))])
+        lines.extend(_render_inference_chain(conclusion, details))
+        lines.extend(_render_reflection_qa(state))
         lines.extend(_render_quality_warnings(conclusion))
         lines.extend(_render_mitigation_remediation(conclusion))
         lines.extend(_render_unsolved_pattern(conclusion))
@@ -173,7 +303,11 @@ def render_technical_report(state: dict[str, Any]) -> str:
 def render_business_report(state: dict[str, Any]) -> str:
     conclusion = state.get("conclusion") or {}
     details = conclusion.get("details") or {}
-    lines = ["# Compass Investigation Report", "", "## 结论", ""]
+    lines = ["# Compass Investigation Report", ""]
+    if conclusion:
+        lines.extend(_render_tldr_card(conclusion))
+        lines.extend(_render_timing_section(conclusion))
+    lines.extend(["", "## 结论", ""])
     if conclusion:
         lines.extend(
             [
@@ -220,8 +354,11 @@ def render_review_report(state: dict[str, Any]) -> str:
         lines.extend(["## 一句话结论", "", "当前还没有可输出的排查结论。"])
         return "\n".join(lines) + "\n"
 
+    lines.extend(_render_tldr_card(conclusion))
+    lines.extend(_render_timing_section(conclusion))
     lines.extend(
         [
+            "",
             "## 一句话结论",
             "",
             mask_text(conclusion.get("summary", "")),
@@ -416,7 +553,13 @@ def _render_action_flow(index: int, action: dict[str, Any]) -> list[str]:
         "",
         "- 操作输入：",
     ]
-    action_input = mask_mapping(action.get("input") or {})
+    raw_input = action.get("input") or {}
+    raw_gate = action.get("gate") or {}
+    explain_text_raw = (
+        str(raw_input.get("explain_text") or raw_gate.get("explain_text") or "").strip()
+    )
+
+    action_input = mask_mapping({k: v for k, v in raw_input.items() if k != "explain_text"})
     if action_input:
         for key, value in action_input.items():
             lines.append(f"  - {key}: {value}")
@@ -424,12 +567,23 @@ def _render_action_flow(index: int, action: dict[str, Any]) -> list[str]:
         lines.append("  - 暂无")
 
     lines.append("- 安全门控：")
-    gate = mask_mapping(action.get("gate") or {})
+    gate = mask_mapping({k: v for k, v in raw_gate.items() if k != "explain_text"})
     if gate:
         for key, value in gate.items():
             lines.append(f"  - {key}: {value}")
     else:
         lines.append("  - 未记录")
+
+    if explain_text_raw:
+        lines.extend(
+            [
+                "- EXPLAIN 原文（可直接复制回贴）：",
+                "",
+                "```text",
+                mask_text(explain_text_raw),
+                "```",
+            ]
+        )
 
     output = action.get("output") or {}
     lines.extend(["- 操作输出：", f"  - summary: {mask_text(output.get('summary', ''))}"])
@@ -451,20 +605,33 @@ def _render_action_flow(index: int, action: dict[str, Any]) -> list[str]:
     return lines
 
 
-def _render_timeline_section(state: dict[str, Any]) -> list[str]:
-    """渲染故障时间线（仅当有带 event_at 的事件时显示）。"""
+def _render_timeline_section(state: dict[str, Any], *, heading: str = "## 故障时间线") -> list[str]:
+    """渲染故障时间线（仅当有带 event_at 的事件时显示）。
+
+    Args:
+        state: session state
+        heading: Markdown 二级标题文案（postmortem 等场景可改用「十、Timeline」等）
+    """
 
     entries = build_timeline(state)
     if not entries:
         return []
-    lines = ["", "## 故障时间线", "", "| 时间 | 类型 | 引用 | 标题 | 详情 |", "|------|------|------|------|------|"]
+    lines = [
+        "",
+        heading,
+        "",
+        "| 时间 | 类型 | 引用 | 关联变更 | 标题 | 详情 |",
+        "|------|------|------|----------|------|------|",
+    ]
     for entry in entries:
         ts = mask_text(str(entry.get("ts", "")))
         kind = mask_text(str(entry.get("kind", "")))
         ref = mask_text(str(entry.get("ref_id", "")))
         title = mask_text(str(entry.get("title", "")))
         detail = mask_text(str(entry.get("detail", "")))
-        lines.append(f"| {ts} | {kind} | {ref} | {title} | {detail} |")
+        related = entry.get("related_changes") or []
+        related_text = mask_text("⤴ " + ", ".join(related)) if related else "—"
+        lines.append(f"| {ts} | {kind} | {ref} | {related_text} | {title} | {detail} |")
     return lines
 
 
@@ -529,7 +696,7 @@ def _render_quality_warnings(conclusion: dict[str, Any]) -> list[str]:
 
 
 def _render_mitigation_remediation(conclusion: dict[str, Any]) -> list[str]:
-    """渲染止血与根治拆分。"""
+    """渲染止血与根治：以表格形式输出 description/owner/due/status/url。"""
 
     mitigation = conclusion.get("mitigation") or []
     remediation = conclusion.get("remediation") or []
@@ -538,12 +705,163 @@ def _render_mitigation_remediation(conclusion: dict[str, Any]) -> list[str]:
     lines = ["", "## 止血与根治"]
     if mitigation:
         lines.extend(["", "### 止血动作（短期降低影响）"])
-        for item in mitigation:
-            lines.append(f"- {mask_text(str(item))}")
+        lines.extend(_render_action_items_table(mitigation))
     if remediation:
         lines.extend(["", "### 根治动作（长期解决根因）"])
-        for item in remediation:
-            lines.append(f"- {mask_text(str(item))}")
+        lines.extend(_render_action_items_table(remediation))
+    return lines
+
+
+def _render_action_items_table(items: list[Any]) -> list[str]:
+    """把 mitigation/remediation 列表（dict 或字符串）渲染为统一表格。"""
+
+    if not items:
+        return []
+    lines = ["", "| # | 动作 | Owner | Due | 状态 | 链接 |", "|---|------|-------|-----|------|------|"]
+    for idx, raw in enumerate(items, start=1):
+        if isinstance(raw, dict):
+            desc = raw.get("description", "") or ""
+            owner = raw.get("owner", "") or "—"
+            due = raw.get("due", "") or "—"
+            status = raw.get("status", "") or "open"
+            url = raw.get("url", "") or "—"
+        else:
+            desc = str(raw)
+            owner = "—"
+            due = "—"
+            status = "open"
+            url = "—"
+        lines.append(
+            f"| {idx} | {mask_text(desc)} | {mask_text(str(owner))} | {mask_text(str(due))} | "
+            f"{mask_text(str(status))} | {mask_text(str(url))} |"
+        )
+    return lines
+
+
+def _render_tldr_card(conclusion: dict[str, Any]) -> list[str]:
+    """渲染 TL;DR + 严重等级头条卡片。"""
+
+    tldr = (conclusion.get("tldr") or "").strip()
+    severity = (conclusion.get("severity") or "").strip()
+    if not tldr and not severity:
+        return []
+    sev_icon = {"sev1": "🔴", "sev2": "🟠", "sev3": "🟡", "sev4": "🟢"}.get(severity, "⚪")
+    sev_label = severity.upper() if severity else "—"
+    lines: list[str] = ["", "## TL;DR"]
+    if tldr:
+        lines.extend(["", f"> {mask_text(tldr)}"])
+    lines.extend(
+        [
+            "",
+            "| 字段 | 内容 |",
+            "|------|------|",
+            f"| 严重等级 | {sev_icon} {mask_text(sev_label)} |",
+        ]
+    )
+    return lines
+
+
+def _render_timing_section(conclusion: dict[str, Any]) -> list[str]:
+    """渲染 MTTD / MTTM / MTTR 时序指标卡。"""
+
+    timing = conclusion.get("timing") or {}
+    if not timing:
+        return []
+
+    def _fmt(minutes: Any) -> str:
+        if minutes is None:
+            return "—"
+        try:
+            value = float(minutes)
+        except (TypeError, ValueError):
+            return mask_text(str(minutes))
+        if value < 1:
+            return f"{value * 60:.0f}s"
+        if value < 60:
+            return f"{value:.1f}m"
+        return f"{value / 60:.2f}h ({value:.0f}m)"
+
+    rows = [
+        ("MTTD（发现 → 响应）", "mttd_minutes", "detected_at", "acknowledged_at"),
+        ("MTTM（响应 → 止血）", "mttm_minutes", "acknowledged_at", "mitigated_at"),
+        ("MTTR（发现 → 解决）", "mttr_minutes", "detected_at", "resolved_at"),
+    ]
+    body = []
+    has_any = False
+    for label, key, start_k, end_k in rows:
+        m = timing.get(key)
+        if m is None and not (timing.get(start_k) and timing.get(end_k)):
+            body.append(f"| {label} | — | {mask_text(str(timing.get(start_k, '') or '—'))} | {mask_text(str(timing.get(end_k, '') or '—'))} |")
+            continue
+        has_any = True
+        body.append(
+            f"| {label} | {mask_text(_fmt(m))} | {mask_text(str(timing.get(start_k, '') or '—'))} | "
+            f"{mask_text(str(timing.get(end_k, '') or '—'))} |"
+        )
+    if not has_any and not any(timing.get(k) for _, _, k, _ in rows):
+        return []
+    lines = [
+        "",
+        "## 时序指标（MTTD / MTTM / MTTR）",
+        "",
+        "| 指标 | 时长 | 起点 | 终点 |",
+        "|------|------|------|------|",
+    ]
+    lines.extend(body)
+    return lines
+
+
+def _render_inference_chain(conclusion: dict[str, Any], details: dict[str, Any]) -> list[str]:
+    """把推断链拆段为有序步骤表。"""
+
+    steps = conclusion.get("inference_steps") or []
+    raw_chain = (details or {}).get("inference_chain", "") or ""
+    if not steps and not raw_chain.strip():
+        return []
+    lines = ["", "## 推断链"]
+    if steps:
+        lines.extend(
+            [
+                "",
+                "| # | 推断步骤 | 引用 |",
+                "|---|----------|------|",
+            ]
+        )
+        for i, step in enumerate(steps, start=1):
+            if isinstance(step, dict):
+                idx = step.get("index") or i
+                text = step.get("text", "")
+                refs = ", ".join(step.get("evidence_refs") or [])
+            else:
+                idx = i
+                text = str(step)
+                refs = ""
+            lines.append(f"| {idx} | {mask_text(str(text))} | {mask_text(refs) or '—'} |")
+    elif raw_chain.strip():
+        lines.extend(["", mask_text(raw_chain.strip())])
+    return lines
+
+
+def _render_reflection_qa(state: dict[str, Any]) -> list[str]:
+    """渲染根因反思的问答（state.flow.reflection_answers 中保存）。"""
+
+    flow = state.get("flow") or {}
+    answers = flow.get("reflection_answers") or []
+    if not answers:
+        return []
+    lines = ["", "## 根因反思（自我盘问）"]
+    for item in answers:
+        q = item.get("question_id") or item.get("question") or "?"
+        prompt = item.get("prompt", "")
+        ans = item.get("answer", "")
+        lines.extend(
+            [
+                "",
+                f"**Q{mask_text(str(q))}：{mask_text(prompt)}**",
+                "",
+                f"> {mask_text(ans)}",
+            ]
+        )
     return lines
 
 

@@ -32,17 +32,22 @@ new
 - `action confirm`：仅当 `plan` 因 SQL 风险等门禁被锁为 `requires_confirmation` 时使用，由用户明确确认风险后解锁。
 - `change record` / `change list`：登记发布、配置、数据迁移、灰度、权限调整等变更，必填 `--type/--target/--description/--event-at`，进入 timeline 与故障窗口对齐。
 - `timeline`：把所有带 `event_at` 的 changes / scene_facts / evidence 与 action_history 合并为按时间排序的故障时间线。
-- `evidence add`：手工补录证据（用户提供的截图、外部线索等）。
-- `hypothesis add`：基于 scene fact / evidence 派生新假设；不允许凭空假设；推荐用 `--falsifiable` 给出反证条件。
+- `evidence add`：手工补录证据（用户提供的截图、外部线索等）。可用 `--change C1 --change C2` 把证据关联到一笔或多笔已登记变更，timeline 表会用 ⤴ 标识"变更→证据"连线。
+- `hypothesis add`：基于 scene fact / evidence 派生新假设；不允许凭空假设；推荐用 `--falsifiable` 给出反证条件，可用 `--change C1` 显式关联到引发猜想的变更。
+- `reflect answer`：把 `next` 触发的"根因反思三问"答案落盘到 `state.flow.reflection_answers`，`report` 中会渲染问答对。`--question 1|2|3 --answer "..."`，同 question_id 重复回答则覆盖最新一次。
 - `conclude`：写结构化结论。除原有 5W1H + Inference Chain 外，新增字段：
-  - `--mitigation`（短期止血动作，可重复传）
-  - `--remediation`（长期根治动作，可重复传）
+  - `--mitigation` / `--remediation`（纯文本可重复传）
+  - `--mitigation-item` / `--remediation-item`（结构化 `desc=...;owner=...;due=...;url=...;status=...`）
   - `--unsolved`（未解之谜，可重复传）
   - `--pattern-scan`（同类扫描方向，可重复传）
   - `--hypothesis`（本结论引用的假设 id，可重复传）
-  会输出 `quality_warnings`：confidence=high 缺强证据 / 推断链缺因果连接词 / mitigation 或 remediation 为空 / 支持的假设缺 falsifiable / 存在 status=支持 的假设但 conclude 未引用 等情况。
+  - `--tldr "<≤3 句执行摘要>"`：给非技术决策者一眼看完，超 3 句会触发 `TLDR_TOO_LONG` 警告
+  - `--severity sev1|sev2|sev3|sev4`：不传则按 blast_radius 启发式推荐
+  - `--detected-at / --acknowledged-at / --mitigated-at / --resolved-at`：用于报告头部的 MTTD/MTTM/MTTR 时序表（MTTM = acknowledged → mitigated）
+  会输出 `quality_warnings`：confidence=high 缺强证据 / 推断链缺因果连接词 / mitigation 或 remediation 为空 / 根治项缺 owner / 支持的假设缺 falsifiable / 存在 status=支持 的假设但 conclude 未引用 / TL;DR 超过 3 句 等情况。
+  runtime 同时会自动把 `inference_chain` 按 → / 因为-所以 / 从…到…使… 拆为 `inference_steps`，报告会渲染为有序步骤表。
 - `reopen`：进入新 revision；旧 conclusion 自动归档到 `conclusion_history`。
-- `report`：按 `--audience technical|business|review` 渲染 Markdown 报告。报告头部会自动渲染 timeline / 变更窗口 / 适用知识；结论段会渲染推断链 + 质量提示 + 止血/根治 + 未解之谜 + 同类扫描。
+- `report`：按 `--audience technical|business|review|postmortem` 渲染 Markdown。`postmortem` 为事故复盘十段式（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline），内容与 technical 共用同一套 state，仅章节编排不同。
 - `strategy keep` / `strategy discard`：结论后必走的最终查询策略沉淀确认。
 - `kb learn` / `kb suggest` / `kb list` / `kb search`：通用知识库（`memory/knowledge.yaml`）。`learn` 录入一句话事实/规则（≤300 字）；`suggest` 按 query/tags 召回 top-N 并可选 `--increment-hits`；`search` 同时搜 markdown 知识与 yaml 知识。
 
@@ -57,6 +62,12 @@ new
 3. 同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？
 
 提示只显示一次（`state.flow.reflection_shown=true`），但是否真的回答它取决于 Agent。`prompts/result-analysis.md` 的"根因下钻五问"模板提供更详细的检查清单。
+
+## 证据链二分定位（next 软提示）
+
+当 `state.evidence_graph` 中形成的最长**有向简单路径**边数 ≥ 3（例如 page→api→method→table），`compass next` 会在 JSON 中附加 `bisect_hint`（并将说明合并进 `message` 文本）。每会话至多提示一次（`state.flow.bisect_hint_shown=true`）。
+
+建议含义：在链路**中间层节点**（某一 API、method、trace 等）两侧各补充一条可对照证据，用「对半缩小」方式定位根因，避免只在链两端重复查。
 
 ## Action Lifecycle
 
