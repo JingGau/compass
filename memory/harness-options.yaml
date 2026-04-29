@@ -1,0 +1,6 @@
+next:
+  # 是否在 evidence_collecting 阶段触发根因反思三问（会生成 next.reflection 并要求 reflect answer 落盘）
+  enable_reflection_questions: false
+
+  # 是否在证据图链路深度达到阈值时附加 bisect_hint（会生成 next.bisect_hint）
+  enable_bisect_hint: false

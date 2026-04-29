@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -2895,44 +2896,188 @@ def test_conclude_with_mitigation_and_remediation_persists(tmp_path: Path) -> No
 
 
 def test_next_emits_reflection_questions_when_evidence_is_strong(tmp_path: Path) -> None:
-    state_file = tmp_path / "session.json"
-    run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-    run_cli(
-        "scene",
-        "fact",
-        "--state-file",
-        str(state_file),
-        "--category",
-        "entrypoint",
-        "--name",
-        "k",
-        "--value",
-        "v",
-        "--source",
-        "src",
-    )
-    for idx in range(3):
+    old_reflect = os.environ.get("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
+    old_bisect = os.environ.get("COMPASS_NEXT_ENABLE_BISECT_HINT")
+    os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = "true"
+    os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = "false"
+    try:
+        state_file = tmp_path / "session.json"
+        run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+        run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+        run_cli(
+            "scene",
+            "fact",
+            "--state-file",
+            str(state_file),
+            "--category",
+            "entrypoint",
+            "--name",
+            "k",
+            "--value",
+            "v",
+            "--source",
+            "src",
+        )
+        for idx in range(3):
+            run_cli(
+                "evidence",
+                "add",
+                "--state-file",
+                str(state_file),
+                "--source",
+                f"sls-{idx}",
+                "--summary",
+                f"日志条目 {idx}",
+                "--kind",
+                "log",
+                "--strength",
+                "strong",
+            )
+        res = run_cli("next", "--state-file", str(state_file), "--json")
+        assert res.returncode == 0, res.stderr
+        payload = json.loads(res.stdout)
+        next_info = payload["next"]
+        assert "反思" in next_info["message"]
+        assert len(next_info.get("reflection") or []) == 3
+    finally:
+        if old_reflect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = old_reflect
+        if old_bisect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_BISECT_HINT", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = old_bisect
+
+
+def test_next_reflection_questions_can_be_disabled_by_config(tmp_path: Path) -> None:
+    old_reflect = os.environ.get("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
+    old_bisect = os.environ.get("COMPASS_NEXT_ENABLE_BISECT_HINT")
+    os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = "false"
+    os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = "true"
+    try:
+        state_file = tmp_path / "session.json"
+        run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
+        run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+        run_cli(
+            "scene",
+            "fact",
+            "--state-file",
+            str(state_file),
+            "--category",
+            "entrypoint",
+            "--name",
+            "k",
+            "--value",
+            "v",
+            "--source",
+            "src",
+        )
+        for idx in range(3):
+            run_cli(
+                "evidence",
+                "add",
+                "--state-file",
+                str(state_file),
+                "--source",
+                f"sls-{idx}",
+                "--summary",
+                f"日志条目 {idx}",
+                "--kind",
+                "log",
+                "--strength",
+                "strong",
+            )
+
+        res = run_cli("next", "--state-file", str(state_file), "--json")
+        assert res.returncode == 0, res.stderr
+        payload = json.loads(res.stdout)
+        next_info = payload["next"]
+        assert "反思" not in next_info.get("message", "")
+        assert next_info.get("reflection") is None
+    finally:
+        if old_reflect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = old_reflect
+        if old_bisect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_BISECT_HINT", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = old_bisect
+
+
+def test_next_bisect_hint_can_be_disabled_by_config(tmp_path: Path) -> None:
+    old_reflect = os.environ.get("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
+    old_bisect = os.environ.get("COMPASS_NEXT_ENABLE_BISECT_HINT")
+    os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = "true"
+    os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = "false"
+    try:
+        import yaml as _yaml
+
+        state_file = tmp_path / "session.json"
+        run_cli("start", "支付订单不同步问题", "--state-file", str(state_file))
+        run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+        run_cli(
+            "scene",
+            "fact",
+            "--state-file",
+            str(state_file),
+            "--category",
+            "entrypoint",
+            "--name",
+            "api",
+            "--value",
+            "/pay/callback",
+            "--source",
+            "用户反馈",
+        )
         run_cli(
             "evidence",
             "add",
             "--state-file",
             str(state_file),
             "--source",
-            f"sls-{idx}",
+            "sls",
             "--summary",
-            f"日志条目 {idx}",
+            "回调日志缺失样本",
             "--kind",
             "log",
             "--strength",
-            "strong",
+            "medium",
         )
-    res = run_cli("next", "--state-file", str(state_file), "--json")
-    assert res.returncode == 0, res.stderr
-    payload = json.loads(res.stdout)
-    next_info = payload["next"]
-    assert "反思" in next_info["message"]
-    assert len(next_info.get("reflection") or []) == 3
+
+        with state_file.open("r", encoding="utf-8") as f:
+            st = _yaml.safe_load(f) or {}
+        st.setdefault("flow", {})["reflection_shown"] = True
+        st["evidence_graph"] = {
+            "nodes": [
+                {"id": "page:A", "type": "page", "value": "A"},
+                {"id": "api:B", "type": "api", "value": "B"},
+                {"id": "method:C", "type": "method", "value": "C"},
+                {"id": "table:D", "type": "table", "value": "D"},
+            ],
+            "edges": [
+                {"from": "page:A", "to": "api:B", "relation": "calls"},
+                {"from": "api:B", "to": "method:C", "relation": "handled_by"},
+                {"from": "method:C", "to": "table:D", "relation": "reads"},
+            ],
+        }
+        with state_file.open("w", encoding="utf-8") as f:
+            _yaml.safe_dump(st, f, allow_unicode=True)
+
+        r1 = run_cli("next", "--state-file", str(state_file), "--json")
+        assert r1.returncode == 0, r1.stderr
+        n1 = json.loads(r1.stdout)["next"]
+        assert "bisect_hint" not in n1
+    finally:
+        if old_reflect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = old_reflect
+        if old_bisect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_BISECT_HINT", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = old_bisect
 
 
 def _setup_minimal_session(tmp_path: Path) -> Path:
@@ -3288,63 +3433,77 @@ def test_next_emits_bisect_hint_once_when_evidence_graph_chain_deep(tmp_path: Pa
     import yaml as _yaml
 
     state_file = tmp_path / "session.json"
-    run_cli("start", "支付订单不同步问题", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-    run_cli(
-        "scene",
-        "fact",
-        "--state-file",
-        str(state_file),
-        "--category",
-        "entrypoint",
-        "--name",
-        "api",
-        "--value",
-        "/pay/callback",
-        "--source",
-        "用户反馈",
-    )
-    run_cli(
-        "evidence",
-        "add",
-        "--state-file",
-        str(state_file),
-        "--source",
-        "sls",
-        "--summary",
-        "回调日志缺失样本",
-        "--kind",
-        "log",
-        "--strength",
-        "medium",
-    )
-    with state_file.open("r", encoding="utf-8") as f:
-        st = _yaml.safe_load(f) or {}
-    st.setdefault("flow", {})["reflection_shown"] = True
-    st["evidence_graph"] = {
-        "nodes": [
-            {"id": "page:A", "type": "page", "value": "A"},
-            {"id": "api:B", "type": "api", "value": "B"},
-            {"id": "method:C", "type": "method", "value": "C"},
-            {"id": "table:D", "type": "table", "value": "D"},
-        ],
-        "edges": [
-            {"from": "page:A", "to": "api:B", "relation": "calls"},
-            {"from": "api:B", "to": "method:C", "relation": "handled_by"},
-            {"from": "method:C", "to": "table:D", "relation": "reads"},
-        ],
-    }
-    with state_file.open("w", encoding="utf-8") as f:
-        _yaml.safe_dump(st, f, allow_unicode=True)
+    old_reflect = os.environ.get("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
+    old_bisect = os.environ.get("COMPASS_NEXT_ENABLE_BISECT_HINT")
+    os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = "false"
+    os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = "true"
+    try:
+        run_cli("start", "支付订单不同步问题", "--state-file", str(state_file))
+        run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+        run_cli(
+            "scene",
+            "fact",
+            "--state-file",
+            str(state_file),
+            "--category",
+            "entrypoint",
+            "--name",
+            "api",
+            "--value",
+            "/pay/callback",
+            "--source",
+            "用户反馈",
+        )
+        run_cli(
+            "evidence",
+            "add",
+            "--state-file",
+            str(state_file),
+            "--source",
+            "sls",
+            "--summary",
+            "回调日志缺失样本",
+            "--kind",
+            "log",
+            "--strength",
+            "medium",
+        )
+        with state_file.open("r", encoding="utf-8") as f:
+            st = _yaml.safe_load(f) or {}
+        st.setdefault("flow", {})["reflection_shown"] = True
+        st["evidence_graph"] = {
+            "nodes": [
+                {"id": "page:A", "type": "page", "value": "A"},
+                {"id": "api:B", "type": "api", "value": "B"},
+                {"id": "method:C", "type": "method", "value": "C"},
+                {"id": "table:D", "type": "table", "value": "D"},
+            ],
+            "edges": [
+                {"from": "page:A", "to": "api:B", "relation": "calls"},
+                {"from": "api:B", "to": "method:C", "relation": "handled_by"},
+                {"from": "method:C", "to": "table:D", "relation": "reads"},
+            ],
+        }
+        with state_file.open("w", encoding="utf-8") as f:
+            _yaml.safe_dump(st, f, allow_unicode=True)
 
-    r1 = run_cli("next", "--state-file", str(state_file), "--json")
-    assert r1.returncode == 0, r1.stderr
-    n1 = json.loads(r1.stdout)["next"]
-    bh = n1.get("bisect_hint") or {}
-    assert bh.get("triggered") is True
-    assert bh.get("max_chain_edges", 0) >= 3
+        r1 = run_cli("next", "--state-file", str(state_file), "--json")
+        assert r1.returncode == 0, r1.stderr
+        n1 = json.loads(r1.stdout)["next"]
+        bh = n1.get("bisect_hint") or {}
+        assert bh.get("triggered") is True
+        assert bh.get("max_chain_edges", 0) >= 3
 
-    r2 = run_cli("next", "--state-file", str(state_file), "--json")
-    assert r2.returncode == 0
-    n2 = json.loads(r2.stdout)["next"]
-    assert "bisect_hint" not in n2
+        r2 = run_cli("next", "--state-file", str(state_file), "--json")
+        assert r2.returncode == 0
+        n2 = json.loads(r2.stdout)["next"]
+        assert "bisect_hint" not in n2
+    finally:
+        if old_reflect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS"] = old_reflect
+        if old_bisect is None:
+            os.environ.pop("COMPASS_NEXT_ENABLE_BISECT_HINT", None)
+        else:
+            os.environ["COMPASS_NEXT_ENABLE_BISECT_HINT"] = old_bisect

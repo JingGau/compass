@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -338,6 +339,45 @@ def _maybe_attach_bisect_hint(path: str | Path, state: dict[str, Any], payload: 
     _update_runtime_state(path, mark_bisect_hint_shown)
 
 
+DEFAULT_HARNESS_OPTIONS: dict[str, Any] = {
+    "next": {
+        "enable_reflection_questions": False,
+        "enable_bisect_hint": False,
+    }
+}
+
+
+def _load_harness_options(path: str | Path) -> dict[str, Any]:
+    """加载可控开关（主要用于降低现场流程负担）。
+
+    现在的规则是：默认全部关闭；只有在用户显式在 `.env`（环境变量）中设置对应布尔值时才会打开。
+
+    env vars（只认这两项；其他都忽略）：
+        - COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS: true/false
+        - COMPASS_NEXT_ENABLE_BISECT_HINT: true/false
+    """
+
+    def _parse_env_bool(name: str) -> bool | None:
+        raw = os.environ.get(name)
+        if raw is None:
+            return None
+        v = str(raw).strip().lower()
+        if v in {"true", "1", "yes", "y", "on"}:
+            return True
+        if v in {"false", "0", "no", "n", "off"}:
+            return False
+        return None
+
+    next_opts = DEFAULT_HARNESS_OPTIONS.get("next", {}).copy()
+    v1 = _parse_env_bool("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
+    v2 = _parse_env_bool("COMPASS_NEXT_ENABLE_BISECT_HINT")
+    if v1 is not None:
+        next_opts["enable_reflection_questions"] = v1
+    if v2 is not None:
+        next_opts["enable_bisect_hint"] = v2
+    return {"next": next_opts}
+
+
 def next_step(path: str | Path) -> dict[str, Any]:
     state = _load_state(path)
     state["__path__"] = str(path)
@@ -380,9 +420,16 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "已有证据，但还缺少场景事实。请先用 scene fact 记录入口、对象、上下游、配置或差异。",
                 "next_actions": ["scene fact", "action record"],
             }
-        reflection = _maybe_reflection_questions(state)
+
+        harness_opts = _load_harness_options(path)
+        next_opts = harness_opts.get("next") if isinstance(harness_opts.get("next"), dict) else {}
+        enable_reflection = bool(next_opts.get("enable_reflection_questions", True))
+        enable_bisect = bool(next_opts.get("enable_bisect_hint", True))
+
+        reflection = _maybe_reflection_questions(state) if enable_reflection else None
         if reflection is not None:
-            _maybe_attach_bisect_hint(path, state, reflection)
+            if enable_bisect:
+                _maybe_attach_bisect_hint(path, state, reflection)
             return reflection
         payload = {
             "phase": phase,
@@ -390,7 +437,8 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
             "next_actions": ["action record", "hypothesis add", "conclude"],
         }
-        _maybe_attach_bisect_hint(path, state, payload)
+        if enable_bisect:
+            _maybe_attach_bisect_hint(path, state, payload)
         return payload
     if phase == "concluded":
         review = state.get("strategy_review") or {}
@@ -1074,15 +1122,7 @@ def conclude_session(
 ) -> dict[str, Any]:
     if not evidence_ids:
         raise CompassRuntimeError("结论必须引用至少一个 evidence id。")
-    clean_details = _validate_conclusion_details(details or {})
-    if severity is not None and severity:
-        sev = severity.strip().lower()
-        if sev not in SEVERITY_LEVELS:
-            raise CompassRuntimeError(
-                f"未知 severity 等级：{severity}。可选：{', '.join(SEVERITY_LEVELS)}。"
-            )
-    else:
-        sev = _suggest_severity(clean_details.get("blast_radius", ""))
+    quality_warnings: list[dict[str, Any]] = []
 
     tldr_text = (tldr or "").strip()
     if tldr_text:
@@ -1106,7 +1146,21 @@ def conclude_session(
         _require_existing_evidence(state, evidence_ids)
         if not state.get("evidence"):
             raise CompassRuntimeError("没有证据，禁止输出结论。")
-        quality_warnings = _assess_conclusion_quality(
+
+        # 先做 evidence 存在性校验，再做结论字段校验，
+        # 保证错误优先级更符合用户预期与现有测试断言。
+        clean_details = _validate_conclusion_details(details or {})
+        if severity is not None and severity:
+            sev = severity.strip().lower()
+            if sev not in SEVERITY_LEVELS:
+                raise CompassRuntimeError(
+                    f"未知 severity 等级：{severity}。可选：{', '.join(SEVERITY_LEVELS)}。"
+                )
+        else:
+            sev = _suggest_severity(clean_details.get("blast_radius", ""))
+
+        quality_warnings.extend(
+            _assess_conclusion_quality(
             state=state,
             summary=conclusion,
             evidence_ids=evidence_ids,
@@ -1116,6 +1170,7 @@ def conclude_session(
             remediation=remediation or [],
             unsolved=unsolved or [],
             related_hypotheses=related_hypotheses or [],
+        )
         )
         if related_hypotheses:
             existing_hids = {str(h.get("id")) for h in state.get("hypotheses") or []}

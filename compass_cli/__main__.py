@@ -6,6 +6,8 @@ from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
 
+from tools.env_config import load_dotenv
+
 from compass_core.intake import intake_problem
 from compass_core.kb import default_roots, search_markdown
 from compass_core.knowledge import (
@@ -41,6 +43,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
+    # 确保 `.env` 中的开关（如 COMPASS_NEXT_ENABLE_*）在命令执行前已注入到 os.environ
+    load_dotenv(PROJECT_ROOT)
     parser = build_parser()
     args = parser.parse_args(argv)
     if not hasattr(args, "handler"):
