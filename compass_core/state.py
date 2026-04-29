@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - fcntl is available on macOS/Linux.
+    fcntl = None  # type: ignore[assignment]
 
 
 def now_iso() -> str:
@@ -40,20 +48,22 @@ def default_state() -> dict[str, Any]:
 
 def read_or_init_state(path: str | Path) -> dict[str, Any]:
     state_path = Path(path)
-    if not state_path.exists():
-        state_path.parent.mkdir(parents=True, exist_ok=True)
-        state = default_state()
-        write_state(state_path, state)
-        return state
-    state = _read_state_raw(state_path)
-    migrated = migrate_state(state)
-    if migrated != state:
-        write_state(state_path, migrated)
-    return migrated
+    with _state_file_lock(state_path):
+        if not state_path.exists():
+            state = default_state()
+            _write_state_unlocked(state_path, state)
+            return state
+        state = _read_state_raw(state_path)
+        migrated = migrate_state(state)
+        if migrated != state:
+            _write_state_unlocked(state_path, migrated)
+        return migrated
 
 
 def read_state(path: str | Path) -> dict[str, Any]:
-    return migrate_state(_read_state_raw(path))
+    state_path = Path(path)
+    with _state_file_lock(state_path):
+        return migrate_state(_read_state_raw(state_path))
 
 
 def _read_state_raw(path: str | Path) -> dict[str, Any]:
@@ -102,8 +112,75 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
 
 def write_state(path: str | Path, state: dict[str, Any]) -> None:
     state_path = Path(path)
+    with _state_file_lock(state_path):
+        _write_state_unlocked(state_path, state)
+
+
+def update_state(path: str | Path, mutator: Callable[[dict[str, Any]], Any]) -> dict[str, Any]:
+    """Read, mutate, and persist state while holding the same file lock."""
+
+    state_path = Path(path)
+    with _state_file_lock(state_path):
+        state = migrate_state(_read_state_raw(state_path)) if state_path.exists() else default_state()
+        result = mutator(state)
+        next_state = result if isinstance(result, dict) else state
+        _write_state_unlocked(state_path, next_state)
+        return next_state
+
+
+@contextmanager
+def _state_file_lock(state_path: str | Path):
+    state_path = Path(state_path)
     state_path.parent.mkdir(parents=True, exist_ok=True)
-    state_path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    lock_path = state_path.with_name(f"{state_path.name}.lock")
+    with lock_path.open("a+", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
+def _write_state_unlocked(path: str | Path, state: dict[str, Any]) -> None:
+    state_path = Path(path)
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = json.dumps(state, ensure_ascii=False, indent=2) + "\n"
+    temp_name: str | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=state_path.parent,
+            prefix=f".{state_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temp_file:
+            temp_name = temp_file.name
+            temp_file.write(payload)
+            temp_file.flush()
+            os.fsync(temp_file.fileno())
+        os.replace(temp_name, state_path)
+        temp_name = None
+        _fsync_directory(state_path.parent)
+    finally:
+        if temp_name is not None:
+            try:
+                os.unlink(temp_name)
+            except FileNotFoundError:
+                pass
+
+
+def _fsync_directory(path: Path) -> None:
+    try:
+        fd = os.open(path, os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    finally:
+        os.close(fd)
 
 
 def _read_yaml_like(text: str) -> dict[str, Any]:

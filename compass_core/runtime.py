@@ -6,7 +6,7 @@ import re
 from typing import Any
 
 from compass_core.intake import intake_problem
-from compass_core.state import default_state, now_iso, read_or_init_state, write_state
+from compass_core.state import default_state, now_iso, read_or_init_state, update_state, write_state
 from tools.action_cards import ActionResult, SafetyGateResult
 from tools.evidence_graph import EvidenceGraph, max_simple_path_length_edges, summarize_graph_nodes_for_bisect
 from tools.sql_gate import assess_sql_explain
@@ -153,8 +153,12 @@ def _maybe_reflection_questions(state: dict[str, Any]) -> dict[str, Any] | None:
     state["flow"]["reflection_shown"] = True
     path = state.get("__path__")
     if path:
-        snapshot = {k: v for k, v in state.items() if k != "__path__"}
-        write_state(path, snapshot)
+        def mark_reflection_shown(current: dict[str, Any]) -> dict[str, Any]:
+            current.setdefault("flow", {})["reflection_shown"] = True
+            _touch(current)
+            return current
+
+        _update_runtime_state(path, mark_reflection_shown)
     return {
         "phase": "evidence_collecting",
         "blocked": False,
@@ -194,7 +198,6 @@ def record_reflection_answer(
     同一 question_id 重复回答时覆盖最新一次回答。
     """
 
-    state = _load_state(path)
     qid = str(question_id).strip()
     if qid not in REFLECTION_QUESTIONS:
         raise CompassRuntimeError(
@@ -203,25 +206,28 @@ def record_reflection_answer(
     text = str(answer or "").strip()
     if not text:
         raise CompassRuntimeError("reflection.answer 不能为空，请用一句话写清你对该问题的判断。")
-    flow = state.setdefault("flow", {})
-    answers = flow.setdefault("reflection_answers", [])
-    item = {
-        "question_id": qid,
-        "prompt": REFLECTION_QUESTIONS[qid],
-        "answer": text,
-        "answered_at": now_iso(),
-    }
-    replaced = False
-    for idx, existing in enumerate(answers):
-        if str(existing.get("question_id", "")).strip() == qid:
-            answers[idx] = item
-            replaced = True
-            break
-    if not replaced:
-        answers.append(item)
-    _touch(state)
-    write_state(path, state)
-    return state
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        flow = state.setdefault("flow", {})
+        answers = flow.setdefault("reflection_answers", [])
+        item = {
+            "question_id": qid,
+            "prompt": REFLECTION_QUESTIONS[qid],
+            "answer": text,
+            "answered_at": now_iso(),
+        }
+        replaced = False
+        for idx, existing in enumerate(answers):
+            if str(existing.get("question_id", "")).strip() == qid:
+                answers[idx] = item
+                replaced = True
+                break
+        if not replaced:
+            answers.append(item)
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[str, Any]]:
@@ -266,21 +272,22 @@ def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[st
 
 
 def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
-    state = _load_state(path)
-    phase = _phase(state)
-    if phase not in {"awaiting_confirmation", "action_ready"}:
-        raise CompassRuntimeError(f"当前阶段 {phase} 不需要确认。")
-    state["flow"].update(
-        {
-            "phase": "action_ready",
-            "confirmed": True,
-            "execution_mode": mode,
-            "allowed_commands": ["next", "action record", "evidence add", "state show"],
-        }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        phase = _phase(state)
+        if phase not in {"awaiting_confirmation", "action_ready"}:
+            raise CompassRuntimeError(f"当前阶段 {phase} 不需要确认。")
+        state["flow"].update(
+            {
+                "phase": "action_ready",
+                "confirmed": True,
+                "execution_mode": mode,
+                "allowed_commands": ["next", "action record", "evidence add", "state show"],
+            }
+        )
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 BISECT_HINT_MIN_CHAIN_EDGES = 3
@@ -323,8 +330,12 @@ def _maybe_attach_bisect_hint(path: str | Path, state: dict[str, Any], payload: 
     base_msg = str(payload.get("message") or "").rstrip()
     payload["message"] = (base_msg + "\n\n" + hint_text) if base_msg else hint_text
 
-    persist = {k: v for k, v in state.items() if k != "__path__"}
-    write_state(path, persist)
+    def mark_bisect_hint_shown(current: dict[str, Any]) -> dict[str, Any]:
+        current.setdefault("flow", {})["bisect_hint_shown"] = True
+        _touch(current)
+        return current
+
+    _update_runtime_state(path, mark_bisect_hint_shown)
 
 
 def next_step(path: str | Path) -> dict[str, Any]:
@@ -417,51 +428,56 @@ def record_action_result(
     raw_ref: str | None = None,
     event_at: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "记录 action")
-    _require_unique_action_id(state, action_id)
-    if track.lower() != "manual" or action_input or gate:
-        _validate_action_plan_fields(track, action_input or {}, gate or {})
-    evidence = _build_evidence(
-        state,
-        source=source,
-        summary=summary,
-        findings=findings or [],
-        supports=supports,
-        action_id=action_id,
-        kind=kind or _kind_from_track(track),
-        strength=strength,
-        raw_ref=raw_ref,
-        event_at=event_at,
-    )
-    state.setdefault("evidence", []).append(evidence)
-    state.setdefault("action_history", []).append(
-        _build_action_history_item(
-            action_id=action_id,
-            track=track,
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "记录 action")
+        _require_unique_action_id(state, action_id)
+        if track.lower() != "manual" or action_input or gate:
+            _validate_action_plan_fields(track, action_input or {}, gate or {})
+        evidence = _build_evidence(
+            state,
             source=source,
-            action_input=action_input or {},
-            gate=gate or {},
             summary=summary,
             findings=findings or [],
-            leads=leads or {},
-            elapsed_ms=elapsed_ms,
-            evidence_id=evidence["id"],
+            supports=supports,
+            action_id=action_id,
+            kind=kind or _kind_from_track(track),
+            strength=strength,
+            raw_ref=raw_ref,
+            event_at=event_at,
         )
-    )
-    _mark_hypothesis(state, supports, evidence["id"])
-    _add_action_leads(state, action_id, summary, findings or [], leads or {})
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "evidence",
-            "allowed_commands": ["next", "action record", "evidence add", "conclude", "state show"],
-        }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state, evidence
+        state.setdefault("evidence", []).append(evidence)
+        state.setdefault("action_history", []).append(
+            _build_action_history_item(
+                action_id=action_id,
+                track=track,
+                source=source,
+                action_input=action_input or {},
+                gate=gate or {},
+                summary=summary,
+                findings=findings or [],
+                leads=leads or {},
+                elapsed_ms=elapsed_ms,
+                evidence_id=evidence["id"],
+            )
+        )
+        _mark_hypothesis(state, supports, evidence["id"])
+        _add_action_leads(state, action_id, summary, findings or [], leads or {})
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "evidence",
+                "allowed_commands": ["next", "action record", "evidence add", "conclude", "state show"],
+            }
+        )
+        _touch(state)
+        output["evidence"] = evidence
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["evidence"]
 
 
 def plan_action(
@@ -475,62 +491,67 @@ def plan_action(
     action_input: dict[str, str] | None = None,
     gate: dict[str, str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "规划 action")
-    _require_unique_action_id(state, action_id)
-    inputs = action_input or {}
-    if track.lower() == "sql" and not inputs.get("env"):
-        inputs["env"] = str(state.get("environment") or state.get("problem", {}).get("environment") or "prod")
-    gates = gate or {}
-    _validate_action_plan_fields(track, inputs, gates)
-    sql_gate_result: SafetyGateResult | None = None
-    if track.lower() == "sql":
-        sql_gate_result = _enforce_sql_explain_gate(inputs, gates)
-    action = {
-        "action_id": action_id,
-        "track": track,
-        "source": source,
-        "objective": objective,
-        "success_criteria": success_criteria,
-        "input": inputs,
-        "gate": gates,
-        "status": "planned",
-        "created_at": now_iso(),
-    }
-    if sql_gate_result and sql_gate_result.requires_confirmation:
-        action["status"] = "requires_confirmation"
-        action["pending_confirmation"] = {
-            "gate_type": sql_gate_result.gate_type,
-            "risk_level": sql_gate_result.risk_level,
-            "summary": sql_gate_result.summary,
-            "details": dict(sql_gate_result.details),
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "规划 action")
+        _require_unique_action_id(state, action_id)
+        inputs = dict(action_input or {})
+        if track.lower() == "sql" and not inputs.get("env"):
+            inputs["env"] = str(state.get("environment") or state.get("problem", {}).get("environment") or "prod")
+        gates = dict(gate or {})
+        _validate_action_plan_fields(track, inputs, gates)
+        sql_gate_result: SafetyGateResult | None = None
+        if track.lower() == "sql":
+            sql_gate_result = _enforce_sql_explain_gate(inputs, gates)
+        action = {
+            "action_id": action_id,
+            "track": track,
+            "source": source,
+            "objective": objective,
+            "success_criteria": success_criteria,
+            "input": inputs,
+            "gate": gates,
+            "status": "planned",
+            "created_at": now_iso(),
         }
-        state.setdefault("pending_confirmations", []).append(
-            {
-                "id": f"{action_id}:sql:{sql_gate_result.risk_level}",
-                "action_id": action_id,
+        if sql_gate_result and sql_gate_result.requires_confirmation:
+            action["status"] = "requires_confirmation"
+            action["pending_confirmation"] = {
                 "gate_type": sql_gate_result.gate_type,
                 "risk_level": sql_gate_result.risk_level,
                 "summary": sql_gate_result.summary,
-                "required_reply": "compass action confirm",
-                "created_at": now_iso(),
+                "details": dict(sql_gate_result.details),
+            }
+            state.setdefault("pending_confirmations", []).append(
+                {
+                    "id": f"{action_id}:sql:{sql_gate_result.risk_level}",
+                    "action_id": action_id,
+                    "gate_type": sql_gate_result.gate_type,
+                    "risk_level": sql_gate_result.risk_level,
+                    "summary": sql_gate_result.summary,
+                    "required_reply": "compass action confirm",
+                    "created_at": now_iso(),
+                }
+            )
+        state.setdefault("action_plan", []).append(action)
+        allowed = ["next", "action complete", "action plan", "scene fact", "hypothesis add", "evidence add", "state show"]
+        if action["status"] == "requires_confirmation":
+            allowed.append("action confirm")
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "action_planning",
+                "allowed_commands": allowed,
             }
         )
-    state.setdefault("action_plan", []).append(action)
-    allowed = ["next", "action complete", "action plan", "scene fact", "hypothesis add", "evidence add", "state show"]
-    if action["status"] == "requires_confirmation":
-        allowed.append("action confirm")
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "action_planning",
-            "allowed_commands": allowed,
-        }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state, action
+        _touch(state)
+        output["action"] = action
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["action"]
 
 
 def confirm_action(
@@ -539,25 +560,30 @@ def confirm_action(
     action_id: str,
     note: str = "",
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "确认 action 风险")
-    action = _find_action_plan(state, action_id)
-    if action.get("status") != "requires_confirmation":
-        raise CompassRuntimeError(
-            f"action {action_id} 状态为 {action.get('status')}，没有待确认的风险门禁。"
-        )
-    action["status"] = "planned"
-    action["confirmed_at"] = now_iso()
-    if note:
-        action["confirmation_note"] = note
-    pending = state.get("pending_confirmations") or []
-    state["pending_confirmations"] = [
-        item for item in pending if str(item.get("action_id")) != action_id
-    ]
-    _touch(state)
-    write_state(path, state)
-    return state, action
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "确认 action 风险")
+        action = _find_action_plan(state, action_id)
+        if action.get("status") != "requires_confirmation":
+            raise CompassRuntimeError(
+                f"action {action_id} 状态为 {action.get('status')}，没有待确认的风险门禁。"
+            )
+        action["status"] = "planned"
+        action["confirmed_at"] = now_iso()
+        if note:
+            action["confirmation_note"] = note
+        pending = state.get("pending_confirmations") or []
+        state["pending_confirmations"] = [
+            item for item in pending if str(item.get("action_id")) != action_id
+        ]
+        _touch(state)
+        output["action"] = action
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["action"]
 
 
 def complete_action(
@@ -574,61 +600,66 @@ def complete_action(
     raw_ref: str | None = None,
     event_at: str | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "完成 action")
-    action = _find_action_plan(state, action_id)
-    if action.get("status") == "completed":
-        raise CompassRuntimeError(f"action 已完成：{action_id}。")
-    if action.get("status") == "requires_confirmation":
-        raise CompassRuntimeError(
-            f"action {action_id} 仍处于风险待确认状态，无法完成。请先执行 "
-            f"`compass action confirm --action-id {action_id} --note ...` 解锁。"
-        )
-    evidence = _build_evidence(
-        state,
-        source=str(action.get("source", "unknown")),
-        summary=summary,
-        findings=findings or [],
-        supports=supports,
-        action_id=action_id,
-        kind=kind or _kind_from_track(str(action.get("track", "manual"))),
-        strength=strength,
-        raw_ref=raw_ref,
-        event_at=event_at,
-    )
-    state.setdefault("evidence", []).append(evidence)
-    state.setdefault("action_history", []).append(
-        _build_action_history_item(
-            action_id=action_id,
-            track=str(action.get("track", "manual")),
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "完成 action")
+        action = _find_action_plan(state, action_id)
+        if action.get("status") == "completed":
+            raise CompassRuntimeError(f"action 已完成：{action_id}。")
+        if action.get("status") == "requires_confirmation":
+            raise CompassRuntimeError(
+                f"action {action_id} 仍处于风险待确认状态，无法完成。请先执行 "
+                f"`compass action confirm --action-id {action_id} --note ...` 解锁。"
+            )
+        evidence = _build_evidence(
+            state,
             source=str(action.get("source", "unknown")),
-            objective=str(action.get("objective", "")),
-            success_criteria=str(action.get("success_criteria", "")),
-            action_input=action.get("input") or {},
-            gate=action.get("gate") or {},
             summary=summary,
             findings=findings or [],
-            leads=leads or {},
-            elapsed_ms=elapsed_ms,
-            evidence_id=evidence["id"],
+            supports=supports,
+            action_id=action_id,
+            kind=kind or _kind_from_track(str(action.get("track", "manual"))),
+            strength=strength,
+            raw_ref=raw_ref,
+            event_at=event_at,
         )
-    )
-    action["status"] = "completed"
-    action["completed_at"] = now_iso()
-    action["evidence_id"] = evidence["id"]
-    _mark_hypothesis(state, supports, evidence["id"])
-    _add_action_leads(state, action_id, summary, findings or [], leads or {})
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "evidence",
-            "allowed_commands": ["next", "action plan", "action complete", "evidence add", "hypothesis add", "conclude", "state show"],
-        }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state, evidence
+        state.setdefault("evidence", []).append(evidence)
+        state.setdefault("action_history", []).append(
+            _build_action_history_item(
+                action_id=action_id,
+                track=str(action.get("track", "manual")),
+                source=str(action.get("source", "unknown")),
+                objective=str(action.get("objective", "")),
+                success_criteria=str(action.get("success_criteria", "")),
+                action_input=action.get("input") or {},
+                gate=action.get("gate") or {},
+                summary=summary,
+                findings=findings or [],
+                leads=leads or {},
+                elapsed_ms=elapsed_ms,
+                evidence_id=evidence["id"],
+            )
+        )
+        action["status"] = "completed"
+        action["completed_at"] = now_iso()
+        action["evidence_id"] = evidence["id"]
+        _mark_hypothesis(state, supports, evidence["id"])
+        _add_action_leads(state, action_id, summary, findings or [], leads or {})
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "evidence",
+                "allowed_commands": ["next", "action plan", "action complete", "evidence add", "hypothesis add", "conclude", "state show"],
+            }
+        )
+        _touch(state)
+        output["evidence"] = evidence
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["evidence"]
 
 
 def add_evidence(
@@ -643,43 +674,48 @@ def add_evidence(
     event_at: str | None = None,
     change_ids: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "新增证据")
-    _require_existing_changes(state, change_ids or [])
-    evidence = _build_evidence(
-        state,
-        source=source,
-        summary=summary,
-        findings=[],
-        supports=supports,
-        action_id=None,
-        kind=kind,
-        strength=strength,
-        raw_ref=raw_ref,
-        event_at=event_at,
-        change_ids=change_ids,
-    )
-    state.setdefault("evidence", []).append(evidence)
-    state.setdefault("action_history", []).append(
-        _build_action_history_item(
-            action_id=f"manual-{evidence['id']}",
-            track="manual",
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "新增证据")
+        _require_existing_changes(state, change_ids or [])
+        evidence = _build_evidence(
+            state,
             source=source,
-            action_input={},
-            gate={"type": "manual", "status": "passed"},
             summary=summary,
             findings=[],
-            leads={},
-            elapsed_ms=0,
-            evidence_id=evidence["id"],
+            supports=supports,
+            action_id=None,
+            kind=kind,
+            strength=strength,
+            raw_ref=raw_ref,
+            event_at=event_at,
+            change_ids=change_ids,
         )
-    )
-    _mark_hypothesis(state, supports, evidence["id"])
-    state["flow"]["phase"] = "evidence_collecting"
-    _touch(state)
-    write_state(path, state)
-    return state, evidence
+        state.setdefault("evidence", []).append(evidence)
+        state.setdefault("action_history", []).append(
+            _build_action_history_item(
+                action_id=f"manual-{evidence['id']}",
+                track="manual",
+                source=source,
+                action_input={},
+                gate={"type": "manual", "status": "passed"},
+                summary=summary,
+                findings=[],
+                leads={},
+                elapsed_ms=0,
+                evidence_id=evidence["id"],
+            )
+        )
+        _mark_hypothesis(state, supports, evidence["id"])
+        state["flow"]["phase"] = "evidence_collecting"
+        _touch(state)
+        output["evidence"] = evidence
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["evidence"]
 
 
 CHANGE_TYPES = {"deploy", "config", "data", "permission", "feature_flag", "rollback", "infra", "other"}
@@ -703,10 +739,6 @@ def record_change(
     结构化进 state.changes，后续 timeline 可与故障窗口对齐。
     """
 
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "登记变更")
-    _require_existing_evidence(state, evidence_ids or [])
     normalized_type = (change_type or "").strip().lower()
     if normalized_type not in CHANGE_TYPES:
         raise CompassRuntimeError(
@@ -719,60 +751,70 @@ def record_change(
     if not (event_at or "").strip():
         raise CompassRuntimeError("change.event_at 不能为空（变更真实发生时间，用于 timeline 对齐）。")
 
-    changes = state.setdefault("changes", [])
-    change_id = f"C{len(changes) + 1}"
-    record: dict[str, Any] = {
-        "id": change_id,
-        "change_type": normalized_type,
-        "target": target.strip(),
-        "description": description.strip(),
-        "event_at": event_at.strip(),
-        "before": (before or "").strip(),
-        "after": (after or "").strip(),
-        "source": (source or "").strip(),
-        "evidence": list(evidence_ids or []),
-        "created_at": now_iso(),
-    }
-    changes.append(record)
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "change_logging",
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "登记变更")
+        _require_existing_evidence(state, evidence_ids or [])
+        changes = state.setdefault("changes", [])
+        change_id = f"C{len(changes) + 1}"
+        record: dict[str, Any] = {
+            "id": change_id,
+            "change_type": normalized_type,
+            "target": target.strip(),
+            "description": description.strip(),
+            "event_at": event_at.strip(),
+            "before": (before or "").strip(),
+            "after": (after or "").strip(),
+            "source": (source or "").strip(),
+            "evidence": list(evidence_ids or []),
+            "created_at": now_iso(),
         }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state, record
+        changes.append(record)
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "change_logging",
+            }
+        )
+        _touch(state)
+        output["record"] = record
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["record"]
 
 
 def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"concluded"}, "重开排查")
-    conclusion = state.get("conclusion")
-    if not conclusion:
-        raise CompassRuntimeError("当前会话没有可重开的结论。")
-    archived = dict(conclusion)
-    archived["status"] = "superseded"
-    archived["superseded_at"] = now_iso()
-    archived["reopen_reason"] = reason
-    archived["revision"] = state.get("revision", 1)
-    if state.get("strategy_review"):
-        archived["strategy_review"] = state.get("strategy_review")
-    state.setdefault("conclusion_history", []).append(archived)
-    state.pop("conclusion", None)
-    state.pop("strategy_review", None)
-    state["revision"] = int(state.get("revision", 1)) + 1
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "reopened",
-            "allowed_commands": ["next", "action plan", "action complete", "evidence add", "scene fact", "hypothesis add", "conclude", "state show"],
-        }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"concluded"}, "重开排查")
+        conclusion = state.get("conclusion")
+        if not conclusion:
+            raise CompassRuntimeError("当前会话没有可重开的结论。")
+        archived = dict(conclusion)
+        archived["status"] = "superseded"
+        archived["superseded_at"] = now_iso()
+        archived["reopen_reason"] = reason
+        archived["revision"] = state.get("revision", 1)
+        if state.get("strategy_review"):
+            archived["strategy_review"] = state.get("strategy_review")
+        state.setdefault("conclusion_history", []).append(archived)
+        state.pop("conclusion", None)
+        state.pop("strategy_review", None)
+        state["revision"] = int(state.get("revision", 1)) + 1
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "reopened",
+                "allowed_commands": ["next", "action plan", "action complete", "evidence add", "scene fact", "hypothesis add", "conclude", "state show"],
+            }
+        )
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 SCENE_FACT_CATEGORIES = {
@@ -814,10 +856,6 @@ def add_scene_fact(
     evidence_ids: list[str] | None = None,
     event_at: str | None = None,
 ) -> dict[str, Any]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "记录场景事实")
-    _require_existing_evidence(state, evidence_ids or [])
     normalized_category = (category or "").strip().lower()
     if normalized_category not in SCENE_FACT_CATEGORIES:
         raise CompassRuntimeError(
@@ -829,27 +867,33 @@ def add_scene_fact(
             "差异 / 对比 / vs / 相比 / 不同于 / 之前 / 之后 / 原本 / 正常 / 异常 / 变更。"
             "建议格式：'故障 X 正常为 Y，差异点 Z'。"
         )
-    fact = {
-        "category": normalized_category,
-        "name": name,
-        "value": value,
-        "source": source,
-        "evidence": evidence_ids or [],
-        "created_at": now_iso(),
-    }
-    if event_at:
-        fact["event_at"] = event_at
-    state.setdefault("scene_facts", []).append(fact)
-    state["flow"].update(
-        {
-            "phase": "evidence_collecting",
-            "current_step": "scene_discovery",
-            "allowed_commands": ["next", "scene fact", "hypothesis add", "action record", "evidence add", "conclude", "state show"],
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "记录场景事实")
+        _require_existing_evidence(state, evidence_ids or [])
+        fact = {
+            "category": normalized_category,
+            "name": name,
+            "value": value,
+            "source": source,
+            "evidence": evidence_ids or [],
+            "created_at": now_iso(),
         }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state
+        if event_at:
+            fact["event_at"] = event_at
+        state.setdefault("scene_facts", []).append(fact)
+        state["flow"].update(
+            {
+                "phase": "evidence_collecting",
+                "current_step": "scene_discovery",
+                "allowed_commands": ["next", "scene fact", "hypothesis add", "action record", "evidence add", "conclude", "state show"],
+            }
+        )
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 def add_hypothesis(
@@ -862,45 +906,47 @@ def add_hypothesis(
     falsifiable: str | None = None,
     change_ids: list[str] | None = None,
 ) -> dict[str, Any]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    _require_phase(state, {"action_ready", "evidence_collecting"}, "新增假设")
     facts = source_facts or []
     evidence = source_evidence or []
     changes_ref = [str(c).strip() for c in (change_ids or []) if str(c).strip()]
     if not facts and not evidence and not changes_ref:
         raise CompassRuntimeError("假设必须引用至少一个 scene fact / evidence / change。")
-    _require_existing_scene_facts(state, facts)
-    _require_existing_evidence(state, evidence)
-    _require_existing_changes(state, changes_ref)
-    existing = {item.get("id") for item in state.get("hypotheses", [])}
-    hypothesis: dict[str, Any] = {
-        "id": hypothesis_id,
-        "statement": statement,
-        "status": "待验证",
-        "source_facts": facts,
-        "source_evidence": evidence,
-    }
-    if changes_ref:
-        hypothesis["source_changes"] = changes_ref
-    if falsifiable is not None:
-        text = str(falsifiable).strip()
-        if text:
-            hypothesis["falsifiable"] = text
-    if hypothesis_id in existing:
-        for idx, item in enumerate(state.get("hypotheses", [])):
-            if item.get("id") == hypothesis_id:
-                merged = {**item, **hypothesis}
-                if falsifiable is not None and not str(falsifiable).strip():
-                    merged.pop("falsifiable", None)
-                state["hypotheses"][idx] = merged
-                break
-    else:
-        state.setdefault("hypotheses", []).append(hypothesis)
-    state["hypothesis_mode"] = "evidence_first"
-    _touch(state)
-    write_state(path, state)
-    return state
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "新增假设")
+        _require_existing_scene_facts(state, facts)
+        _require_existing_evidence(state, evidence)
+        _require_existing_changes(state, changes_ref)
+        existing = {item.get("id") for item in state.get("hypotheses", [])}
+        hypothesis: dict[str, Any] = {
+            "id": hypothesis_id,
+            "statement": statement,
+            "status": "待验证",
+            "source_facts": facts,
+            "source_evidence": evidence,
+        }
+        if changes_ref:
+            hypothesis["source_changes"] = changes_ref
+        if falsifiable is not None:
+            text = str(falsifiable).strip()
+            if text:
+                hypothesis["falsifiable"] = text
+        if hypothesis_id in existing:
+            for idx, item in enumerate(state.get("hypotheses", [])):
+                if item.get("id") == hypothesis_id:
+                    merged = {**item, **hypothesis}
+                    if falsifiable is not None and not str(falsifiable).strip():
+                        merged.pop("falsifiable", None)
+                    state["hypotheses"][idx] = merged
+                    break
+        else:
+            state.setdefault("hypotheses", []).append(hypothesis)
+        state["hypothesis_mode"] = "evidence_first"
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 SEVERITY_LEVELS = ("sev1", "sev2", "sev3", "sev4")
@@ -1026,33 +1072,9 @@ def conclude_session(
     mitigated_at: str | None = None,
     resolved_at: str | None = None,
 ) -> dict[str, Any]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    if not state.get("scene_facts"):
-        raise CompassRuntimeError("缺少场景事实，禁止直接结论。请先通过 scene fact 记录入口、对象、上下游、配置或差异事实。")
     if not evidence_ids:
         raise CompassRuntimeError("结论必须引用至少一个 evidence id。")
-    _require_existing_evidence(state, evidence_ids)
-    if not state.get("evidence"):
-        raise CompassRuntimeError("没有证据，禁止输出结论。")
     clean_details = _validate_conclusion_details(details or {})
-    quality_warnings = _assess_conclusion_quality(
-        state=state,
-        summary=conclusion,
-        evidence_ids=evidence_ids,
-        confidence=confidence,
-        details=clean_details,
-        mitigation=mitigation or [],
-        remediation=remediation or [],
-        unsolved=unsolved or [],
-        related_hypotheses=related_hypotheses or [],
-    )
-    if related_hypotheses:
-        existing_hids = {str(h.get("id")) for h in state.get("hypotheses") or []}
-        invalid = [hid for hid in related_hypotheses if str(hid) not in existing_hids]
-        if invalid:
-            raise CompassRuntimeError(f"--hypothesis 引用了不存在的假设：{', '.join(invalid)}")
-
     if severity is not None and severity:
         sev = severity.strip().lower()
         if sev not in SEVERITY_LEVELS:
@@ -1077,47 +1099,72 @@ def conclude_session(
                 }
             )
 
-    timing = {}
-    detected = (detected_at or state.get("problem", {}).get("detected_at") or "").strip()
-    if detected:
-        timing["detected_at"] = detected
-    if acknowledged_at:
-        timing["acknowledged_at"] = acknowledged_at.strip()
-    if mitigated_at:
-        timing["mitigated_at"] = mitigated_at.strip()
-    timing["resolved_at"] = (resolved_at or now_iso()).strip()
-    timing["mttd_minutes"] = _diff_minutes(detected, timing.get("acknowledged_at"))
-    timing["mttm_minutes"] = _diff_minutes(timing.get("acknowledged_at"), timing.get("mitigated_at"))
-    timing["mttr_minutes"] = _diff_minutes(detected, timing.get("resolved_at"))
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        if not state.get("scene_facts"):
+            raise CompassRuntimeError("缺少场景事实，禁止直接结论。请先通过 scene fact 记录入口、对象、上下游、配置或差异事实。")
+        _require_existing_evidence(state, evidence_ids)
+        if not state.get("evidence"):
+            raise CompassRuntimeError("没有证据，禁止输出结论。")
+        quality_warnings = _assess_conclusion_quality(
+            state=state,
+            summary=conclusion,
+            evidence_ids=evidence_ids,
+            confidence=confidence,
+            details=clean_details,
+            mitigation=mitigation or [],
+            remediation=remediation or [],
+            unsolved=unsolved or [],
+            related_hypotheses=related_hypotheses or [],
+        )
+        if related_hypotheses:
+            existing_hids = {str(h.get("id")) for h in state.get("hypotheses") or []}
+            invalid = [hid for hid in related_hypotheses if str(hid) not in existing_hids]
+            if invalid:
+                raise CompassRuntimeError(f"--hypothesis 引用了不存在的假设：{', '.join(invalid)}")
 
-    state["conclusion"] = {
-        "summary": conclusion,
-        "tldr": tldr_text,
-        "severity": sev,
-        "confidence": confidence,
-        "evidence": evidence_ids,
-        "details": clean_details,
-        "inference_steps": _split_inference_steps(clean_details.get("inference_chain", "")),
-        "next_actions": next_actions or [],
-        "mitigation": _normalize_action_items(mitigation),
-        "remediation": _normalize_action_items(remediation),
-        "unsolved": list(unsolved or []),
-        "pattern_scan": list(pattern_scan or []),
-        "related_hypotheses": list(related_hypotheses or []),
-        "timing": timing,
-        "quality_warnings": quality_warnings,
-    }
-    state["strategy_review"] = _build_strategy_review(state, conclusion, evidence_ids, clean_details)
-    state["flow"].update(
-        {
-            "phase": "concluded",
-            "current_step": "conclusion",
-            "allowed_commands": ["report", "strategy keep", "strategy discard", "state show"],
+        timing = {}
+        detected = (detected_at or state.get("problem", {}).get("detected_at") or "").strip()
+        if detected:
+            timing["detected_at"] = detected
+        if acknowledged_at:
+            timing["acknowledged_at"] = acknowledged_at.strip()
+        if mitigated_at:
+            timing["mitigated_at"] = mitigated_at.strip()
+        timing["resolved_at"] = (resolved_at or now_iso()).strip()
+        timing["mttd_minutes"] = _diff_minutes(detected, timing.get("acknowledged_at"))
+        timing["mttm_minutes"] = _diff_minutes(timing.get("acknowledged_at"), timing.get("mitigated_at"))
+        timing["mttr_minutes"] = _diff_minutes(detected, timing.get("resolved_at"))
+
+        state["conclusion"] = {
+            "summary": conclusion,
+            "tldr": tldr_text,
+            "severity": sev,
+            "confidence": confidence,
+            "evidence": evidence_ids,
+            "details": clean_details,
+            "inference_steps": _split_inference_steps(clean_details.get("inference_chain", "")),
+            "next_actions": next_actions or [],
+            "mitigation": _normalize_action_items(mitigation),
+            "remediation": _normalize_action_items(remediation),
+            "unsolved": list(unsolved or []),
+            "pattern_scan": list(pattern_scan or []),
+            "related_hypotheses": list(related_hypotheses or []),
+            "timing": timing,
+            "quality_warnings": quality_warnings,
         }
-    )
-    _touch(state)
-    write_state(path, state)
-    return state
+        state["strategy_review"] = _build_strategy_review(state, conclusion, evidence_ids, clean_details)
+        state["flow"].update(
+            {
+                "phase": "concluded",
+                "current_step": "conclusion",
+                "allowed_commands": ["report", "strategy keep", "strategy discard", "state show"],
+            }
+        )
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
 
 
 _STRONG_KINDS = {"log", "sql", "code"}
@@ -1307,32 +1354,37 @@ def decide_strategy_review(
     title: str | None = None,
     memory_path: str | Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    state = _load_state(path)
-    _require_phase(state, {"concluded"}, "确认策略沉淀")
-    review = state.get("strategy_review") or {}
-    if not review:
-        raise CompassRuntimeError("当前会话没有待确认的策略沉淀项。请先通过 conclude 输出结论。")
-    if review.get("status") not in {"pending", "kept", "discarded"}:
-        raise CompassRuntimeError(f"未知策略沉淀状态：{review.get('status')}。")
-    if review.get("status") != "pending":
-        raise CompassRuntimeError(f"策略沉淀已确认：{review.get('status')}。如需重新沉淀，请 reopen 后输出新结论。")
+    output: dict[str, Any] = {}
 
-    decision = {
-        "status": "kept" if keep else "discarded",
-        "decided_at": now_iso(),
-        "note": note,
-    }
-    if title:
-        review.setdefault("candidate", {})["title"] = title
-    review.update(decision)
-    state["strategy_review"] = review
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_phase(state, {"concluded"}, "确认策略沉淀")
+        review = state.get("strategy_review") or {}
+        if not review:
+            raise CompassRuntimeError("当前会话没有待确认的策略沉淀项。请先通过 conclude 输出结论。")
+        if review.get("status") not in {"pending", "kept", "discarded"}:
+            raise CompassRuntimeError(f"未知策略沉淀状态：{review.get('status')}。")
+        if review.get("status") != "pending":
+            raise CompassRuntimeError(f"策略沉淀已确认：{review.get('status')}。如需重新沉淀，请 reopen 后输出新结论。")
 
-    if keep and memory_path:
-        _append_strategy_memory(memory_path, review)
+        decision = {
+            "status": "kept" if keep else "discarded",
+            "decided_at": now_iso(),
+            "note": note,
+        }
+        if title:
+            review.setdefault("candidate", {})["title"] = title
+        review.update(decision)
+        state["strategy_review"] = review
 
-    _touch(state)
-    write_state(path, state)
-    return state, review
+        if keep and memory_path:
+            _append_strategy_memory(memory_path, review)
+
+        _touch(state)
+        output["review"] = review
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["review"]
 
 
 def _build_strategy_review(
@@ -1693,10 +1745,21 @@ def _conclusion_quality_errors(details: dict[str, str]) -> list[str]:
 
 def _load_state(path: str | Path) -> dict[str, Any]:
     state = read_or_init_state(path)
+    return _prepare_runtime_state(state)
+
+
+def _prepare_runtime_state(state: dict[str, Any]) -> dict[str, Any]:
     state.setdefault("flow", {})
     state["flow"].setdefault("phase", "new")
     state["flow"].setdefault("confirmed", False)
     return state
+
+
+def _update_runtime_state(path: str | Path, mutator) -> dict[str, Any]:
+    def wrapped(state: dict[str, Any]):
+        return mutator(_prepare_runtime_state(state))
+
+    return update_state(path, wrapped)
 
 
 def _phase(state: dict[str, Any]) -> str:
