@@ -73,7 +73,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     confirm = subparsers.add_parser("confirm", help="approve the investigation session and unlock actions")
     confirm.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
-    confirm.add_argument("--mode", choices=("auto", "manual"), default=None, help=argparse.SUPPRESS)
     confirm.add_argument("--json", action="store_true", dest="json_output")
     confirm.set_defaults(handler=handle_confirm)
 
@@ -574,7 +573,7 @@ def handle_start(args: argparse.Namespace) -> int:
 
 def handle_confirm(args: argparse.Namespace) -> int:
     try:
-        state = confirm_session(args.state_file, args.mode)
+        state = confirm_session(args.state_file)
     except CompassRuntimeError as exc:
         return print_error(exc)
     payload = {"ok": True, "state": state}

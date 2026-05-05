@@ -132,11 +132,11 @@ DISABLED_RESP = {
 }
 
 _TRUTHY = {"1", "true", "yes", "on"}
-_AGENT_ADAPTER_MODES = {"agent_auto", "agent-auto", "auto", "agent", "runtime"}
-_MANUAL_ADAPTER_MODES = {"manual", "human", "user"}
+_RUNTIME_ADAPTER_MODES = {"runtime"}
+_DIRECT_ADAPTER_MODES = {"manual", "human", "user"}
 
 
-def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: str | None = None) -> dict | None:
+def runtime_action_guard(adapter: str, operation: str, *, expected_track: str | None = None) -> dict | None:
     """阻止 Agent 绕过 Compass Runtime 直接查询 adapter。
 
     人工直接使用 adapter 时不会设置 runtime 变量，因此不受影响。
@@ -193,9 +193,9 @@ def _adapter_runtime_mode() -> str:
     if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() in _TRUTHY:
         return "runtime"
     explicit = os.environ.get("COMPASS_ADAPTER_MODE", "").strip().lower()
-    if explicit in _AGENT_ADAPTER_MODES:
+    if explicit in _RUNTIME_ADAPTER_MODES:
         return "runtime"
-    if explicit in _MANUAL_ADAPTER_MODES or not explicit:
+    if explicit in _DIRECT_ADAPTER_MODES or not explicit:
         return "manual"
     return "invalid"
 

@@ -15,7 +15,7 @@ _ADAPTERS_DIR = Path(__file__).resolve().parent.parent
 if str(_ADAPTERS_DIR.parent) not in sys.path:
     sys.path.insert(0, str(_ADAPTERS_DIR.parent))
 
-from adapters.base import BaseAdapter, agent_auto_runtime_guard
+from adapters.base import BaseAdapter, runtime_action_guard
 
 
 def _parse_time(t: str) -> int:
@@ -181,7 +181,7 @@ class SLSClient(BaseAdapter):
         blocked = self._check_enabled()
         if blocked:
             return blocked
-        runtime_blocked = agent_auto_runtime_guard("sls", "query_logs", expected_track="sls")
+        runtime_blocked = runtime_action_guard("sls", "query_logs", expected_track="sls")
         if runtime_blocked:
             return runtime_blocked
         logstore_blocked = self._check_logstore_confirmation(env, logstore, logstore_confirmed)

@@ -17,7 +17,7 @@ def _write_large_state(path: Path, writer: int) -> None:
             "schema_version": 2,
             "writer": writer,
             "payload": f"并发写入-{writer}-" * 5000,
-            "flow": {"current_step": writer, "completed_steps": [], "execution_mode": "auto"},
+            "flow": {"current_step": writer, "completed_steps": [], "stale_field": "ignored"},
         },
     )
 

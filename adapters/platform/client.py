@@ -21,7 +21,7 @@ _ADAPTERS_DIR = Path(__file__).resolve().parent.parent
 if str(_ADAPTERS_DIR.parent) not in sys.path:
     sys.path.insert(0, str(_ADAPTERS_DIR.parent))
 
-from adapters.base import MultiProfileAdapter, agent_auto_runtime_guard
+from adapters.base import MultiProfileAdapter, runtime_action_guard
 
 
 # ── SQL 安全分析 ──────────────────────────────────────────────────────────────
@@ -155,7 +155,7 @@ class PlatformClient(MultiProfileAdapter):
         """
         if not self._enabled:
             return self._disabled_response()
-        runtime_blocked = agent_auto_runtime_guard("platform", "query_sql", expected_track="sql")
+        runtime_blocked = runtime_action_guard("platform", "query_sql", expected_track="sql")
         if runtime_blocked:
             return runtime_blocked
         blocked = self._guard_sql(sql)
@@ -170,7 +170,7 @@ class PlatformClient(MultiProfileAdapter):
         """
         if not self._enabled:
             return self._disabled_response()
-        runtime_blocked = agent_auto_runtime_guard("platform", "count", expected_track="sql")
+        runtime_blocked = runtime_action_guard("platform", "count", expected_track="sql")
         if runtime_blocked:
             return runtime_blocked
         blocked = self._guard_sql(sql)
@@ -194,7 +194,7 @@ class PlatformClient(MultiProfileAdapter):
         """
         if not self._enabled:
             return self._disabled_response()
-        runtime_blocked = agent_auto_runtime_guard("platform", "export_async", expected_track="sql")
+        runtime_blocked = runtime_action_guard("platform", "export_async", expected_track="sql")
         if runtime_blocked:
             return runtime_blocked
         blocked = self._guard_sql(sql)

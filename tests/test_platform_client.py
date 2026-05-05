@@ -1,7 +1,7 @@
 from adapters.platform.client import PlatformClient
 
 
-def test_agent_auto_rejects_direct_platform_query_without_runtime_action(tmp_path, monkeypatch) -> None:
+def test_runtime_guard_rejects_direct_platform_query_without_runtime_action(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COMPASS_RUNTIME_GUARD", "1")
     monkeypatch.delenv("COMPASS_RUNTIME_ACTION_ID", raising=False)
     monkeypatch.delenv("COMPASS_RUNTIME_STATE_FILE", raising=False)

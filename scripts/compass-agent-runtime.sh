@@ -13,6 +13,5 @@ fi
 
 export COMPASS_ADAPTER_MODE=runtime
 export COMPASS_RUNTIME_GUARD=1
-unset COMPASS_AGENT_AUTO
 
 exec "$@"

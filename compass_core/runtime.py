@@ -171,12 +171,11 @@ def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[st
     return [m.to_dict() for m in matches]
 
 
-def confirm_session(path: str | Path, mode: str | None = None) -> dict[str, Any]:
+def confirm_session(path: str | Path) -> dict[str, Any]:
     def mutate(state: dict[str, Any]) -> dict[str, Any]:
         phase = _phase(state)
         if phase not in {"awaiting_confirmation", "action_ready"}:
             raise CompassRuntimeError(f"当前阶段 {phase} 不需要确认。")
-        flow = state.setdefault("flow", {})
         state["flow"].update(
             {
                 "phase": "action_ready",
@@ -185,12 +184,11 @@ def confirm_session(path: str | Path, mode: str | None = None) -> dict[str, Any]
                 "allowed_commands": ["next", "scene fact", "playbook recall", "action plan", "evidence add", "state show"],
             }
         )
-        flow.pop("execution_mode", None)
         _append_event(
             state,
             "session_confirmed",
             summary="session approved; continue until runtime gate or user interruption",
-            refs={"phase": "action_ready", "legacy_mode_arg": str(mode or "")},
+            refs={"phase": "action_ready"},
         )
         _touch(state)
         return state

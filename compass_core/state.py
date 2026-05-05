@@ -102,11 +102,17 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
         },
     )
     if isinstance(migrated.get("flow"), dict):
-        migrated["flow"].setdefault("current_step", 1)
-        migrated["flow"].setdefault("completed_steps", [])
-        migrated["flow"].setdefault("confirmed", False)
-        migrated["flow"].setdefault("confirmation_policy", "first_confirm_then_continue_until_gate")
-        migrated["flow"].pop("execution_mode", None)
+        flow = migrated["flow"]
+        normalized_flow = {
+            "current_step": flow.get("current_step", 1),
+            "completed_steps": flow.get("completed_steps", []),
+            "confirmed": flow.get("confirmed", False),
+            "confirmation_policy": flow.get("confirmation_policy", "first_confirm_then_continue_until_gate"),
+        }
+        for key in ("phase", "allowed_commands", "report_generated", "report_generated_at"):
+            if key in flow:
+                normalized_flow[key] = flow[key]
+        migrated["flow"] = normalized_flow
     migrated.setdefault("revision", 1)
     migrated.setdefault("mode", "investigation_only")
     migrated.setdefault("write_policy", "no_code_or_data_mutation")

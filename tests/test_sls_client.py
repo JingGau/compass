@@ -36,7 +36,7 @@ default_env: "prod"
     assert result["confirmation"]["requested_logstore"] == "app-logstore"
 
 
-def test_agent_auto_rejects_direct_sls_query_without_runtime_action(tmp_path: Path, monkeypatch) -> None:
+def test_runtime_guard_rejects_direct_sls_query_without_runtime_action(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("COMPASS_RUNTIME_GUARD", "1")
     monkeypatch.delenv("COMPASS_RUNTIME_ACTION_ID", raising=False)
     monkeypatch.delenv("COMPASS_RUNTIME_STATE_FILE", raising=False)

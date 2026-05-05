@@ -295,7 +295,7 @@ def test_start_uses_explicit_non_prod_environment_only_when_user_says_so(tmp_pat
 def test_sql_action_plan_defaults_to_session_environment_prod(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     explain_low = (
@@ -343,7 +343,7 @@ def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
 
-    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "auto", "--json")
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--json")
 
     assert confirmed.returncode == 0, confirmed.stderr
     assert json.loads(confirmed.stdout)["state"]["flow"]["phase"] == "action_ready"
@@ -368,7 +368,7 @@ def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -
     assert "evidence_graph" not in payload["state"]
 
 
-def test_confirm_is_single_session_approval_not_execution_mode(tmp_path: Path) -> None:
+def test_confirm_is_single_session_approval(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
 
@@ -379,19 +379,16 @@ def test_confirm_is_single_session_approval_not_execution_mode(tmp_path: Path) -
     assert flow["phase"] == "action_ready"
     assert flow["confirmed"] is True
     assert flow["confirmation_policy"] == "first_confirm_then_continue_until_gate"
-    assert "execution_mode" not in flow
 
 
-def test_confirm_legacy_mode_argument_does_not_restore_session_modes(tmp_path: Path) -> None:
+def test_confirm_rejects_legacy_mode_argument(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
 
-    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "manual", "--json")
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
 
-    assert confirmed.returncode == 0, confirmed.stdout + confirmed.stderr
-    flow = json.loads(confirmed.stdout)["state"]["flow"]
-    assert flow["confirmation_policy"] == "first_confirm_then_continue_until_gate"
-    assert "execution_mode" not in flow
+    assert confirmed.returncode != 0
+    assert "unrecognized arguments: --mode auto" in confirmed.stderr
 
 
 def test_next_and_start_do_not_suggest_confirm_mode(tmp_path: Path) -> None:
@@ -410,7 +407,7 @@ def test_next_and_start_do_not_suggest_confirm_mode(tmp_path: Path) -> None:
 def test_next_guides_agents_to_plan_actions_not_record_after_confirm(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "auto", "--json")
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--json")
 
     assert confirmed.returncode == 0, confirmed.stderr
     allowed = json.loads(confirmed.stdout)["state"]["flow"]["allowed_commands"]
@@ -445,7 +442,7 @@ def test_next_guides_agents_to_plan_actions_not_record_after_confirm(tmp_path: P
 def test_action_plan_requires_scene_fact_first(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     blocked = run_cli(
         "action",
@@ -472,7 +469,7 @@ def test_action_plan_requires_scene_fact_first(tmp_path: Path) -> None:
 def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -615,7 +612,7 @@ def test_strategy_review_requires_report_after_conclusion(tmp_path: Path) -> Non
     state_file = tmp_path / "session.json"
     memory_file = tmp_path / "strategies.yaml"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     run_planned_action(state_file, ensure_scene=False)
     run_cli(
@@ -670,7 +667,7 @@ def test_strategy_memory_preserves_planned_action_query_path(tmp_path: Path) -> 
     state_file = tmp_path / "session.json"
     memory_file = tmp_path / "strategies.yaml"
     run_cli("start", "支付单 2604251117229860 预付款停充，今天 11:17", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -778,7 +775,7 @@ def test_strategy_keep_rejects_invalid_strategy_memory_shape(tmp_path: Path) -> 
     memory_file = tmp_path / "strategies.yaml"
     memory_file.write_text("strategies: {}\n", encoding="utf-8")
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -841,7 +838,7 @@ def test_strategy_keep_rejects_invalid_strategy_memory_shape(tmp_path: Path) -> 
 def test_report_renders_structured_technical_and_business_views(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "evidence",
         "add",
@@ -952,7 +949,7 @@ def test_report_renders_structured_technical_and_business_views(tmp_path: Path) 
 def test_review_report_escapes_markdown_table_pipes(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "evidence",
         "add",
@@ -1038,7 +1035,7 @@ def test_review_report_without_conclusion_uses_neutral_wording(tmp_path: Path) -
 def test_concluded_session_blocks_more_actions(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -1109,7 +1106,7 @@ def test_concluded_session_blocks_more_actions(tmp_path: Path) -> None:
 def test_concluded_session_blocks_manual_evidence_add(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -1173,7 +1170,7 @@ def test_concluded_session_blocks_manual_evidence_add(tmp_path: Path) -> None:
 def test_action_plan_complete_stores_structured_history_and_report_flow(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -1227,7 +1224,7 @@ def test_action_plan_complete_stores_structured_history_and_report_flow(tmp_path
 def test_action_plan_rejects_duplicate_action_id(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -1272,7 +1269,7 @@ def test_action_plan_rejects_duplicate_action_id(tmp_path: Path) -> None:
 def test_action_plan_then_complete_creates_evidence_and_history(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     planned = run_cli(
@@ -1347,7 +1344,7 @@ def test_action_plan_then_complete_creates_evidence_and_history(tmp_path: Path) 
 def test_action_plan_and_complete_render_natural_language_display(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     planned = run_cli(
@@ -1411,7 +1408,7 @@ def test_action_plan_and_complete_render_natural_language_display(tmp_path: Path
 def test_action_plan_json_includes_display_contract(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     planned = run_cli(
@@ -1439,10 +1436,10 @@ def test_action_plan_json_includes_display_contract(tmp_path: Path) -> None:
     assert display["after"].startswith("结果：")
 
 
-def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
+def test_action_env_prints_runtime_contract(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     planned = run_cli(
@@ -1502,7 +1499,7 @@ def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
 def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     completed = run_planned_action(state_file, json_output=True)
 
@@ -1524,7 +1521,7 @@ def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) ->
 def test_action_plan_records_applied_playbooks_and_knowledge(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     run_playbook_recall(state_file, match="direct-failure-to-change-root-cause")
 
@@ -1561,7 +1558,7 @@ def test_action_plan_records_applied_playbooks_and_knowledge(tmp_path: Path) -> 
 def test_action_plan_injects_context_without_requiring_recall_step(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
 
     planned = run_cli(
@@ -1596,7 +1593,7 @@ def test_action_plan_injects_context_without_requiring_recall_step(tmp_path: Pat
 def test_action_plan_injects_recalled_playbook_context_when_available(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
     recalled = run_playbook_recall(state_file, match="screenshot-or-keyword-to-runtime-logs")
     assert recalled.returncode == 0, recalled.stderr
@@ -1630,7 +1627,7 @@ def test_action_plan_injects_recalled_playbook_context_when_available(tmp_path: 
 def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     planned = run_cli(
         "action",
@@ -1676,7 +1673,7 @@ def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
 def test_next_task_card_recommends_log_plan_for_screenshot_keyword(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
 
     result = run_cli("next", "--state-file", str(state_file), "--json")
@@ -1693,7 +1690,7 @@ def test_next_task_card_recommends_log_plan_for_screenshot_keyword(tmp_path: Pat
 def test_next_task_card_recommends_change_check_for_direct_failure(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "某把枪突然充电校验失败，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file, category="object", name="gun_tcp", value="枪 TCP 连不上网关", source="SLS")
     run_cli(
         "evidence",
@@ -1724,7 +1721,7 @@ def test_sls_generic_keywords_can_be_configured_by_environment(tmp_path: Path, m
     monkeypatch.setenv("COMPASS_SLS_GENERIC_KEYWORDS", "payment-ways-v2")
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     blocked = run_cli(
@@ -1764,7 +1761,7 @@ def test_sls_generic_keywords_can_be_configured_by_environment(tmp_path: Path, m
 def test_action_complete_rejects_unplanned_action(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     completed = run_cli(
         "action",
@@ -1785,7 +1782,7 @@ def test_action_complete_rejects_unplanned_action(tmp_path: Path) -> None:
 def test_action_complete_rejects_already_completed_action(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     run_cli(
         "action",
@@ -1831,7 +1828,7 @@ def test_action_complete_rejects_already_completed_action(tmp_path: Path) -> Non
 def test_next_and_report_surface_pending_action_plan(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -1892,7 +1889,7 @@ def test_next_and_report_surface_pending_action_plan(tmp_path: Path) -> None:
 def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     sls_missing_time = run_cli(
@@ -1955,7 +1952,7 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
 def test_sls_action_plan_defaults_time_range_to_seven_days(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     planned = run_cli(
@@ -1995,7 +1992,7 @@ def test_non_prod_sls_gate_can_be_relaxed_by_environment_switch(tmp_path: Path, 
     monkeypatch.setenv("COMPASS_NON_PROD_RELAX_GATES", "1")
     state_file = tmp_path / "session.json"
     run_cli("start", "uat 用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     relaxed = run_cli(
@@ -2034,7 +2031,7 @@ def test_non_prod_gate_switch_does_not_relax_prod_sls(tmp_path: Path, monkeypatc
     monkeypatch.setenv("COMPASS_NON_PROD_RELAX_GATES", "1")
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     blocked = run_cli(
@@ -2068,7 +2065,7 @@ def test_non_prod_gate_switch_does_not_relax_prod_sls(tmp_path: Path, monkeypatc
 def test_action_plan_accepts_valid_track_specific_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     valid = run_cli(
@@ -2110,7 +2107,7 @@ def test_action_plan_accepts_valid_track_specific_fields(tmp_path: Path) -> None
 def test_sls_action_plan_requires_distinctive_anchor_and_keyword_source(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "充电单号 2604251117229860 余额不足停充", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file, name="charge_start", value="预付款启动充电", source="用户问题")
 
     generic_anchor = run_cli(
@@ -2215,7 +2212,7 @@ def test_sls_action_plan_requires_distinctive_anchor_and_keyword_source(tmp_path
 def test_action_plan_validates_code_kb_and_unknown_tracks(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     code_missing_target = run_cli(
@@ -2291,7 +2288,7 @@ def test_action_plan_validates_code_kb_and_unknown_tracks(tmp_path: Path) -> Non
 def test_manual_action_plan_allows_empty_input_and_gate(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
 
     manual = run_cli(
@@ -2329,7 +2326,7 @@ def test_code_search_requires_planned_code_action_and_records_event(tmp_path: Pa
         encoding="utf-8",
     )
     run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(
         state_file,
         category="entrypoint",
@@ -2402,7 +2399,7 @@ def test_code_search_rejects_non_code_action(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     planned = run_cli(
         "action",
@@ -2448,7 +2445,7 @@ def test_code_search_rejects_non_read_only_scope(tmp_path: Path) -> None:
     source_file.parent.mkdir(parents=True)
     source_file.write_text("ORG_CODE_NOT_MATCH = True\n", encoding="utf-8")
     run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     planned = run_cli(
         "action",
@@ -2500,7 +2497,7 @@ def test_code_show_requires_path_inside_action_repo(tmp_path: Path) -> None:
     (repo / "src").mkdir(parents=True)
     outside.write_text("SECRET = True\n", encoding="utf-8")
     run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     planned = run_cli(
         "action",
@@ -2552,7 +2549,7 @@ def test_code_show_returns_line_window_and_records_event(tmp_path: Path) -> None
     source_file.parent.mkdir(parents=True)
     source_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
     run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     planned = run_cli(
         "action",
@@ -2619,7 +2616,8 @@ def test_active_guides_do_not_reintroduce_auto_manual_session_modes() -> None:
         ROOT / "knowledge" / "playbooks" / "_index.md",
         ROOT / "adapters" / "sls" / "README.md",
         ROOT / "adapters" / "platform" / "README.md",
-        ROOT / "scripts" / "compass-agent-auto.sh",
+        ROOT / "scripts" / "compass-agent-runtime.sh",
+        ROOT / "docs" / "architecture.md",
     ]
     forbidden = ["自动模式", "手动模式", "自动/手动", "`auto` 模式", "`manual` 模式", "confirm --mode", "execution_mode"]
     for path in active_docs:
@@ -2631,7 +2629,7 @@ def test_active_guides_do_not_reintroduce_auto_manual_session_modes() -> None:
 def test_report_masks_sensitive_display_values(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_planned_action(
         state_file,
         source="SLS",
@@ -2651,7 +2649,7 @@ def test_report_masks_sensitive_display_values(tmp_path: Path) -> None:
 def test_report_masks_sensitive_values_in_conclusion_details(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -2710,7 +2708,7 @@ def test_report_masks_sensitive_values_in_conclusion_details(tmp_path: Path) -> 
 def test_conclude_requires_scene_facts_before_hypothesis_lock_in(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     added = run_cli(
         "evidence",
         "add",
@@ -2760,7 +2758,7 @@ def test_conclude_requires_scene_facts_before_hypothesis_lock_in(tmp_path: Path)
 def test_scene_fact_records_evidence_first_context_and_report_renders_it(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "evidence",
         "add",
@@ -2806,7 +2804,7 @@ def test_scene_fact_records_evidence_first_context_and_report_renders_it(tmp_pat
 def test_hypothesis_can_be_derived_from_scene_fact_and_evidence(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "evidence",
         "add",
@@ -2869,7 +2867,7 @@ def test_hypothesis_can_be_derived_from_scene_fact_and_evidence(tmp_path: Path) 
 def test_scene_fact_rejects_unknown_evidence_refs(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     fact = run_cli(
         "scene",
@@ -2896,7 +2894,7 @@ def test_scene_fact_rejects_unknown_evidence_refs(tmp_path: Path) -> None:
 def test_manual_evidence_is_visible_in_action_history(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     added = run_cli(
         "evidence",
@@ -2922,7 +2920,7 @@ def test_manual_evidence_is_visible_in_action_history(tmp_path: Path) -> None:
 def test_hypothesis_rejects_unknown_source_refs(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     missing_fact = run_cli(
         "hypothesis",
@@ -2978,7 +2976,7 @@ def test_hypothesis_rejects_unknown_source_refs(tmp_path: Path) -> None:
 def test_hypothesis_requires_fact_or_evidence_source(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     blocked = run_cli(
         "hypothesis",
@@ -2999,7 +2997,7 @@ def test_hypothesis_requires_fact_or_evidence_source(tmp_path: Path) -> None:
 def test_next_guides_scene_discovery_before_hypothesis_validation(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     initial_next = run_cli("next", "--state-file", str(state_file), "--json")
 
@@ -3033,7 +3031,7 @@ def test_next_guides_scene_discovery_before_hypothesis_validation(tmp_path: Path
 def test_conclude_rejects_low_information_details(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3122,7 +3120,7 @@ def test_state_show_writes_migrated_schema_back_to_file(tmp_path: Path) -> None:
         json.dumps(
             {
                 "session_id": "legacy",
-                "flow": {"current_step": 1, "execution_mode": "auto"},
+                "flow": {"current_step": 1, "stale_field": "ignored"},
                 "entities": {"order_no": "123456"},
             },
             ensure_ascii=False,
@@ -3138,13 +3136,13 @@ def test_state_show_writes_migrated_schema_back_to_file(tmp_path: Path) -> None:
     assert persisted["flow"]["completed_steps"] == []
     assert persisted["flow"]["confirmed"] is False
     assert persisted["flow"]["confirmation_policy"] == "first_confirm_then_continue_until_gate"
-    assert "execution_mode" not in persisted["flow"]
+    assert "stale_field" not in persisted["flow"]
     assert persisted["scene_facts"] == []
     assert persisted["action_history"] == []
 def test_report_json_includes_rendered_report_for_audience(tmp_path: Path) -> None:
     state_file = tmp_path / "state.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3172,7 +3170,7 @@ def test_report_json_includes_rendered_report_for_audience(tmp_path: Path) -> No
 def test_reopen_supersedes_conclusion_and_allows_new_evidence(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3260,7 +3258,7 @@ def test_reopen_supersedes_conclusion_and_allows_new_evidence(tmp_path: Path) ->
 def test_evidence_records_kind_strength_and_report_renders_quality(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     added = run_cli(
         "evidence",
@@ -3296,7 +3294,7 @@ def test_evidence_records_kind_strength_and_report_renders_quality(tmp_path: Pat
 def test_evidence_rejects_unknown_quality_values(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
 
     bad_kind = run_cli(
         "evidence",
@@ -3353,7 +3351,7 @@ _EXPLAIN_HIGH_RISK = (
 def _start_sql_session(tmp_path: Path) -> Path:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_scene_fact(state_file)
     return state_file
 
@@ -3625,7 +3623,7 @@ def test_kb_learn_rejects_overlong_statement(tmp_path: Path) -> None:
 def test_change_record_then_list_round_trip(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户 15921195068 礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     record = run_cli(
         "change",
         "record",
@@ -3658,7 +3656,7 @@ def test_change_record_then_list_round_trip(tmp_path: Path) -> None:
 def test_change_record_rejects_unknown_type(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     result = run_cli(
         "change",
         "record",
@@ -3681,7 +3679,7 @@ def test_change_record_rejects_unknown_type(tmp_path: Path) -> None:
 def test_timeline_orders_changes_and_facts_chronologically(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3724,7 +3722,7 @@ def test_timeline_orders_changes_and_facts_chronologically(tmp_path: Path) -> No
 def test_scene_fact_diff_requires_comparison_keyword(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     bad = run_cli(
         "scene",
         "fact",
@@ -3764,7 +3762,7 @@ def test_scene_fact_diff_requires_comparison_keyword(tmp_path: Path) -> None:
 def test_hypothesis_falsifiable_field_persists(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3804,7 +3802,7 @@ def test_hypothesis_falsifiable_field_persists(tmp_path: Path) -> None:
 def test_conclude_quality_warnings_for_high_confidence_without_strong_evidence(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3873,7 +3871,7 @@ def test_conclude_quality_warnings_for_high_confidence_without_strong_evidence(t
 def test_conclude_warns_when_direct_failure_has_no_change_evidence(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "某把枪突然充电校验失败", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -3945,7 +3943,7 @@ def test_conclude_warns_when_direct_failure_has_no_change_evidence(tmp_path: Pat
 def test_conclude_with_mitigation_and_remediation_persists(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "礼品卡不展示", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
@@ -4028,7 +4026,7 @@ def _setup_minimal_session(tmp_path: Path) -> Path:
 
     state_file = tmp_path / "session.json"
     run_cli("start", "支付回调丢失导致订单不到账", "--state-file", str(state_file))
-    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli("confirm", "--state-file", str(state_file))
     run_cli(
         "scene",
         "fact",
