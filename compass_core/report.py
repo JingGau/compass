@@ -150,7 +150,7 @@ def render_technical_report(state: dict[str, Any]) -> str:
     conclusion_history = state.get("conclusion_history") or []
     if conclusion:
         lines.extend(_render_tldr_card(conclusion))
-        lines.extend(_render_timing_section(conclusion))
+        lines.extend(_render_conclusion_timeline(state, conclusion))
         lines.extend(
             [
                 "",
@@ -790,6 +790,88 @@ def _render_timing_section(conclusion: dict[str, Any]) -> list[str]:
     ]
     lines.extend(body)
     return lines
+
+
+def _render_conclusion_timeline(state: dict[str, Any], conclusion: dict[str, Any]) -> list[str]:
+    """把结论关键时间点和带 event_at 的事件合成最终结论时间线。"""
+
+    rows: list[dict[str, str]] = []
+    timing = conclusion.get("timing") or {}
+    timing_rows = [
+        ("detected_at", "发现/检测", "问题被发现或首次被明确记录"),
+        ("acknowledged_at", "开始响应", "排查或处置开始"),
+        ("mitigated_at", "完成止血", "短期影响被控制"),
+        ("resolved_at", "问题恢复", "问题完全恢复或结论定稿"),
+    ]
+    for key, label, detail in timing_rows:
+        ts = str(timing.get(key) or "").strip()
+        if ts:
+            rows.append(
+                {
+                    "ts": ts,
+                    "sort": _timeline_sort_key(ts),
+                    "kind": label,
+                    "ref": "conclusion",
+                    "detail": detail,
+                }
+            )
+
+    for item in build_timeline(state):
+        rows.append(
+            {
+                "ts": str(item.get("ts", "")),
+                "sort": item.get("ts_sort", float("inf")),
+                "kind": _timeline_kind_label(str(item.get("kind", ""))),
+                "ref": str(item.get("ref_id", "")) or "-",
+                "detail": _timeline_detail(item),
+            }
+        )
+
+    if not rows:
+        return []
+
+    rows.sort(key=lambda item: (item.get("sort", float("inf")), item.get("kind", ""), item.get("ref", "")))
+    lines = [
+        "",
+        "## 结论时间线",
+        "",
+        "| 时间 | 节点 | 引用 | 说明 |",
+        "|------|------|------|------|",
+    ]
+    for row in rows:
+        lines.append(
+            f"| {mask_text(row.get('ts', ''))} | {mask_text(row.get('kind', ''))} | "
+            f"{mask_text(row.get('ref', ''))} | {mask_text(row.get('detail', ''))} |"
+        )
+
+    timing_section = _render_timing_section(conclusion)
+    if timing_section:
+        lines.extend(timing_section)
+    return lines
+
+
+def _timeline_sort_key(value: str) -> float:
+    from compass_core.timeline import _parse_ts
+
+    parsed = _parse_ts(value)
+    return parsed if parsed is not None else float("inf")
+
+
+def _timeline_kind_label(kind: str) -> str:
+    return {
+        "change": "变更",
+        "scene_fact": "场景事实",
+        "evidence": "证据",
+        "action": "查询动作",
+    }.get(kind, kind or "事件")
+
+
+def _timeline_detail(item: dict[str, Any]) -> str:
+    title = str(item.get("title", "")).strip()
+    detail = str(item.get("detail", "")).strip()
+    if title and detail:
+        return f"{title}：{detail}"
+    return title or detail
 
 
 def _render_inference_chain(conclusion: dict[str, Any], details: dict[str, Any]) -> list[str]:

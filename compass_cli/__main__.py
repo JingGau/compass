@@ -30,7 +30,6 @@ from compass_core.runtime import (
     decide_strategy_review,
     next_step,
     plan_action,
-    record_action_result,
     record_change,
     reopen_session,
     start_session,
@@ -120,30 +119,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     action_complete.add_argument("--json", action="store_true", dest="json_output")
     action_complete.set_defaults(handler=handle_action_complete)
-
-    action_record = action_sub.add_parser("record", help="record an executed action as evidence")
-    action_record.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
-    action_record.add_argument("--action-id", required=True)
-    action_record.add_argument("--track", default="manual")
-    action_record.add_argument("--source", required=True)
-    action_record.add_argument("--summary", required=True)
-    action_record.add_argument("--input", action="append", default=[])
-    action_record.add_argument("--gate", action="append", default=[])
-    action_record.add_argument("--elapsed-ms", type=int, default=0)
-    action_record.add_argument("--finding", action="append", default=[])
-    action_record.add_argument("--lead", action="append", default=[])
-    action_record.add_argument("--supports")
-    action_record.add_argument("--kind")
-    action_record.add_argument("--strength", default="medium")
-    action_record.add_argument("--raw-ref")
-    action_record.add_argument(
-        "--event-at",
-        dest="event_at",
-        default=None,
-        help="该证据对应的真实事件时间，用于 timeline",
-    )
-    action_record.add_argument("--json", action="store_true", dest="json_output")
-    action_record.set_defaults(handler=handle_action_record)
 
     evidence = subparsers.add_parser("evidence", help="manage evidence")
     evidence_sub = evidence.add_subparsers(dest="evidence_command", required=True)
@@ -609,35 +584,6 @@ def handle_action_complete(args: argparse.Namespace) -> int:
         print_json(payload)
     else:
         print(f"已完成 action {args.action_id}，生成证据 {evidence['id']}：{evidence['summary']}")
-    return 0
-
-
-def handle_action_record(args: argparse.Namespace) -> int:
-    try:
-        state, evidence = record_action_result(
-            args.state_file,
-            action_id=args.action_id,
-            source=args.source,
-            summary=args.summary,
-            track=args.track,
-            action_input=parse_pairs(args.input),
-            gate=parse_pairs(args.gate),
-            elapsed_ms=args.elapsed_ms,
-            findings=args.finding,
-            leads=parse_leads(args.lead),
-            supports=args.supports,
-            kind=args.kind,
-            strength=args.strength,
-            raw_ref=args.raw_ref,
-            event_at=getattr(args, "event_at", None),
-        )
-    except CompassRuntimeError as exc:
-        return print_error(exc)
-    payload = {"ok": True, "evidence": evidence, "state": state}
-    if args.json_output:
-        print_json(payload)
-    else:
-        print(f"已记录证据 {evidence['id']}：{evidence['summary']}")
     return 0
 
 

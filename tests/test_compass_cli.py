@@ -19,6 +19,69 @@ def run_cli(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_planned_action(
+    state_file: Path,
+    *,
+    action_id: str = "A1",
+    source: str = "SLS",
+    summary: str = "查询完成",
+    track: str = "manual",
+    objective: str = "验证问题线索",
+    success_criteria: str = "产生可引用证据",
+    inputs: list[str] | None = None,
+    gates: list[str] | None = None,
+    elapsed_ms: int | None = None,
+    findings: list[str] | None = None,
+    leads: list[str] | None = None,
+    supports: str | None = None,
+    json_output: bool = False,
+) -> subprocess.CompletedProcess[str]:
+    plan_args = [
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        action_id,
+        "--track",
+        track,
+        "--source",
+        source,
+        "--objective",
+        objective,
+        "--success-criteria",
+        success_criteria,
+    ]
+    for item in inputs or []:
+        plan_args.extend(["--input", item])
+    for item in gates or []:
+        plan_args.extend(["--gate", item])
+    planned = run_cli(*plan_args)
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    complete_args = [
+        "action",
+        "complete",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        action_id,
+        "--summary",
+        summary,
+    ]
+    if elapsed_ms is not None:
+        complete_args.extend(["--elapsed-ms", str(elapsed_ms)])
+    for item in findings or []:
+        complete_args.extend(["--finding", item])
+    for item in leads or []:
+        complete_args.extend(["--lead", item])
+    if supports:
+        complete_args.extend(["--supports", supports])
+    if json_output:
+        complete_args.append("--json")
+    return run_cli(*complete_args)
+
+
 def test_intake_outputs_structured_json() -> None:
     result = run_cli("intake", "用户支付成功但订单没有推进，订单号 123456，今天上午", "--json")
 
@@ -113,19 +176,19 @@ def test_start_creates_controlled_session_and_requires_confirmation(tmp_path: Pa
 
     blocked = run_cli(
         "action",
-        "record",
+        "plan",
         "--state-file",
         str(state_file),
         "--action-id",
         "A1",
+        "--track",
+        "manual",
         "--source",
         "SLS",
-        "--summary",
-        "财务返回礼品卡",
-        "--finding",
-        "payWaysPanels contains gift card",
-        "--supports",
-        "H1",
+        "--objective",
+        "确认财务是否返回礼品卡",
+        "--success-criteria",
+        "生成可引用证据",
         "--json",
     )
 
@@ -207,6 +270,44 @@ def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -
     assert confirmed.returncode == 0, confirmed.stderr
     assert json.loads(confirmed.stdout)["state"]["flow"]["phase"] == "action_ready"
 
+    recorded = run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+        findings=[
+            "finance returned subPayWay=3 amount=2319.01",
+            "payment-ways-v2 response removed gift card",
+        ],
+        leads=["trace_ids=trace-1", "interfaces=/app/gun/payment-ways-v2"],
+        supports="H2",
+        json_output=True,
+    )
+
+    assert recorded.returncode == 0, recorded.stderr
+    payload = json.loads(recorded.stdout)
+    assert payload["ok"] is True
+    assert payload["evidence"]["id"] == "E1"
+    assert payload["state"]["flow"]["phase"] == "evidence_collecting"
+    assert "evidence_graph" not in payload["state"]
+
+
+def test_next_guides_agents_to_plan_actions_not_record_after_confirm(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "auto", "--json")
+
+    assert confirmed.returncode == 0, confirmed.stderr
+    allowed = json.loads(confirmed.stdout)["state"]["flow"]["allowed_commands"]
+    assert "scene fact" in allowed
+    assert "action plan" in allowed
+    assert "action record" not in allowed
+
+    next_res = run_cli("next", "--state-file", str(state_file), "--json")
+    assert next_res.returncode == 0, next_res.stderr
+    next_actions = json.loads(next_res.stdout)["next"]["next_actions"]
+    assert "scene fact" in next_actions
+    assert "action plan" in next_actions
+    assert "action record" not in next_actions
+
     recorded = run_cli(
         "action",
         "record",
@@ -217,26 +318,11 @@ def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -
         "--source",
         "SLS",
         "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
-        "--finding",
-        "finance returned subPayWay=3 amount=2319.01",
-        "--finding",
-        "payment-ways-v2 response removed gift card",
-        "--lead",
-        "trace_ids=trace-1",
-        "--lead",
-        "interfaces=/app/gun/payment-ways-v2",
-        "--supports",
-        "H2",
+        "绕过 action plan 的事后补录",
         "--json",
     )
-
-    assert recorded.returncode == 0, recorded.stderr
-    payload = json.loads(recorded.stdout)
-    assert payload["ok"] is True
-    assert payload["evidence"]["id"] == "E1"
-    assert payload["state"]["flow"]["phase"] == "evidence_collecting"
-    assert "evidence_graph" not in payload["state"]
+    assert recorded.returncode == 2
+    assert "invalid choice" in recorded.stderr
 
 
 def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: Path) -> None:
@@ -272,21 +358,11 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert no_evidence.returncode == 1
     assert "不存在" in json.loads(no_evidence.stdout)["error"]
 
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
-        "--finding",
-        "finance returned gift card",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+        findings=["finance returned gift card"],
+        supports="H2",
     )
 
     incomplete = run_cli(
@@ -515,17 +591,9 @@ def test_strategy_keep_rejects_invalid_strategy_memory_shape(tmp_path: Path) -> 
         "--source",
         "用户问题",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
     )
     run_cli(
         "conclude",
@@ -605,25 +673,12 @@ def test_report_renders_structured_technical_and_business_views(tmp_path: Path) 
         "--source",
         "SLS trace",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
-        "--finding",
-        "finance returned gift card",
-        "--lead",
-        "trace_ids=trace-1",
-        "--lead",
-        "interfaces=/app/gun/payment-ways-v2",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+        findings=["finance returned gift card"],
+        leads=["trace_ids=trace-1", "interfaces=/app/gun/payment-ways-v2"],
+        supports="H2",
     )
     conclude = run_cli(
         "conclude",
@@ -706,24 +761,6 @@ def test_review_report_escapes_markdown_table_pipes(tmp_path: Path) -> None:
         "trace 命中 /app/gun/payment|ways",
     )
     run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS|prod",
-        "--summary",
-        "16:51:02 finance|guan 响应差异",
-        "--finding",
-        "finance returned gift card",
-        "--lead",
-        "trace_ids=trace-1",
-        "--supports",
-        "H1",
-    )
-    run_cli(
         "scene",
         "fact",
         "--state-file",
@@ -736,6 +773,14 @@ def test_review_report_escapes_markdown_table_pipes(tmp_path: Path) -> None:
         "/app/gun/payment|ways",
         "--source",
         "SLS trace",
+    )
+    run_planned_action(
+        state_file,
+        source="SLS|prod",
+        summary="16:51:02 finance|guan 响应差异",
+        findings=["finance returned gift card"],
+        leads=["trace_ids=trace-1"],
+        supports="H1",
     )
     conclude = run_cli(
         "conclude",
@@ -805,19 +850,10 @@ def test_concluded_session_blocks_more_actions(tmp_path: Path) -> None:
         "--source",
         "SLS trace",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡",
+        supports="H2",
     )
     run_cli(
         "conclude",
@@ -847,20 +883,24 @@ def test_concluded_session_blocks_more_actions(tmp_path: Path) -> None:
 
     blocked = run_cli(
         "action",
-        "record",
+        "plan",
         "--state-file",
         str(state_file),
         "--action-id",
         "A2",
+        "--track",
+        "manual",
         "--source",
         "SLS",
-        "--summary",
+        "--objective",
         "结论后追加证据",
+        "--success-criteria",
+        "不应允许",
         "--json",
     )
 
     assert blocked.returncode == 1
-    assert "当前阶段 concluded 不允许记录 action" in json.loads(blocked.stdout)["error"]
+    assert "当前阶段 concluded 不允许规划 action" in json.loads(blocked.stdout)["error"]
 
 
 def test_concluded_session_blocks_manual_evidence_add(tmp_path: Path) -> None:
@@ -881,17 +921,9 @@ def test_concluded_session_blocks_manual_evidence_add(tmp_path: Path) -> None:
         "--source",
         "SLS trace",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡",
     )
     run_cli(
         "conclude",
@@ -935,45 +967,41 @@ def test_concluded_session_blocks_manual_evidence_add(tmp_path: Path) -> None:
     assert "当前阶段 concluded 不允许新增证据" in json.loads(blocked.stdout)["error"]
 
 
-def test_action_record_stores_structured_history_and_report_flow(tmp_path: Path) -> None:
+def test_action_plan_complete_stores_structured_history_and_report_flow(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-
-    recorded = run_cli(
-        "action",
-        "record",
+    run_cli(
+        "scene",
+        "fact",
         "--state-file",
         str(state_file),
-        "--action-id",
-        "A1",
-        "--track",
-        "sls",
+        "--category",
+        "entrypoint",
+        "--name",
+        "app_payment_ways",
+        "--value",
+        "/app/gun/payment-ways-v2",
         "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
-        "--input",
-        "query=15921195068 AND payment-ways-v2",
-        "--input",
-        "time_range=2026-04-25 16:40~17:10",
-        "--input",
-        "anchor=15921195068",
-        "--gate",
-        "type=sls",
-        "--gate",
-        "status=passed",
-        "--gate",
-        "keyword_source=code",
-        "--elapsed-ms",
-        "1200",
-        "--finding",
-        "finance returned gift card",
-        "--lead",
-        "trace_ids=trace-1",
-        "--supports",
-        "H2",
-        "--json",
+        "用户问题",
+    )
+
+    recorded = run_planned_action(
+        state_file,
+        track="sls",
+        source="SLS",
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+        inputs=[
+            "query=15921195068 AND payment-ways-v2",
+            "time_range=2026-04-25 16:40~17:10",
+            "anchor=15921195068",
+        ],
+        gates=["type=sls", "status=passed", "keyword_source=code"],
+        elapsed_ms=1200,
+        findings=["finance returned gift card"],
+        leads=["trace_ids=trace-1"],
+        supports="H2",
+        json_output=True,
     )
 
     assert recorded.returncode == 0, recorded.stderr
@@ -993,34 +1021,44 @@ def test_action_record_stores_structured_history_and_report_flow(tmp_path: Path)
     assert "操作输出" in report.stdout
 
 
-def test_action_record_rejects_duplicate_action_id(tmp_path: Path) -> None:
+def test_action_plan_rejects_duplicate_action_id(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
     run_cli(
-        "action",
-        "record",
+        "scene",
+        "fact",
         "--state-file",
         str(state_file),
-        "--action-id",
-        "A1",
+        "--category",
+        "entrypoint",
+        "--name",
+        "app_payment_ways",
+        "--value",
+        "/app/gun/payment-ways-v2",
         "--source",
-        "SLS",
-        "--summary",
-        "第一次查询 payment-ways-v2 日志",
+        "用户问题",
+    )
+    run_planned_action(
+        state_file,
+        summary="第一次查询 payment-ways-v2 日志",
     )
 
     duplicate = run_cli(
         "action",
-        "record",
+        "plan",
         "--state-file",
         str(state_file),
         "--action-id",
         "A1",
+        "--track",
+        "manual",
         "--source",
         "SLS",
-        "--summary",
+        "--objective",
         "第二次查询 payment-ways-v2 日志",
+        "--success-criteria",
+        "不应允许",
         "--json",
     )
 
@@ -1542,21 +1580,12 @@ def test_report_masks_sensitive_display_values(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "用户手机号 15921195068，token=abc-secret-token",
-        "--finding",
-        "phone=15921195068",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        source="SLS",
+        summary="用户手机号 15921195068，token=abc-secret-token",
+        findings=["phone=15921195068"],
+        supports="H2",
     )
 
     report = run_cli("report", "--state-file", str(state_file), "--audience", "technical")
@@ -1585,17 +1614,9 @@ def test_report_masks_sensitive_values_in_conclusion_details(tmp_path: Path) -> 
         "--source",
         "用户问题",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡",
     )
     run_cli(
         "conclude",
@@ -1638,19 +1659,10 @@ def test_conclude_requires_scene_facts_before_hypothesis_lock_in(tmp_path: Path)
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡",
+        supports="H2",
     )
 
     blocked = run_cli(
@@ -1953,7 +1965,7 @@ def test_next_guides_scene_discovery_before_hypothesis_validation(tmp_path: Path
 
     assert after_fact.returncode == 0, after_fact.stderr
     payload = json.loads(after_fact.stdout)
-    assert "action record" in payload["next"]["next_actions"]
+    assert "action plan" in payload["next"]["next_actions"]
     assert "hypothesis add" in payload["next"]["next_actions"]
 
 
@@ -1975,19 +1987,10 @@ def test_conclude_rejects_low_information_details(tmp_path: Path) -> None:
         "--source",
         "用户问题",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
-        "--supports",
-        "H2",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+        supports="H2",
     )
 
     weak = run_cli(
@@ -2119,17 +2122,9 @@ def test_reopen_supersedes_conclusion_and_allows_new_evidence(tmp_path: Path) ->
         "--source",
         "用户问题",
     )
-    run_cli(
-        "action",
-        "record",
-        "--state-file",
-        str(state_file),
-        "--action-id",
-        "A1",
-        "--source",
-        "SLS",
-        "--summary",
-        "财务返回礼品卡，guan-zhong 最终响应无礼品卡",
+    run_planned_action(
+        state_file,
+        summary="财务返回礼品卡，guan-zhong 最终响应无礼品卡",
     )
     run_cli(
         "conclude",
@@ -2989,6 +2984,94 @@ def test_conclude_renders_tldr_severity_and_mttr(tmp_path: Path) -> None:
     assert "TL;DR" in out
     assert "MTTR" in out
     assert "🟠 SEV2" in out
+
+
+def test_technical_report_renders_conclusion_timeline_before_root_cause(tmp_path: Path) -> None:
+    state_file = _setup_minimal_session(tmp_path)
+    run_cli(
+        "change",
+        "record",
+        "--state-file",
+        str(state_file),
+        "--type",
+        "deploy",
+        "--target",
+        "order-server@v1.2.3",
+        "--description",
+        "上线 MQ 客户端升级",
+        "--event-at",
+        "2026-04-29T13:00:00+08:00",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "13:30 后开始出现回调日志缺失",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+        "--event-at",
+        "2026-04-29T13:30:00+08:00",
+    )
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "MQ 客户端升级后 ACK 异常导致订单未推进",
+        "--evidence",
+        "E1",
+        "--evidence",
+        "E2",
+        "--confidence",
+        "high",
+        "--what",
+        "支付回调消息丢失",
+        "--where",
+        "order-server consume queue",
+        "--when",
+        "2026-04-29 13:30 前后",
+        "--why-technical",
+        "MQ 客户端升级后 ACK 异常",
+        "--why-business",
+        "用户支付后订单未推进",
+        "--blast-radius",
+        "影响 50 名用户",
+        "--how",
+        "支付回调 → MQ ACK 异常 → 订单未推进",
+        "--inference-chain",
+        "C1 变更 → E2 日志缺失 → E1 用户反馈",
+        "--mitigation",
+        "补发对账消息",
+        "--remediation",
+        "回滚 MQ 客户端并补充 ACK 告警",
+        "--detected-at",
+        "2026-04-29T13:30:00+08:00",
+        "--acknowledged-at",
+        "2026-04-29T13:35:00+08:00",
+        "--mitigated-at",
+        "2026-04-29T13:50:00+08:00",
+        "--resolved-at",
+        "2026-04-29T15:30:00+08:00",
+    )
+    assert res.returncode == 0, res.stderr
+
+    report = run_cli("report", "--state-file", str(state_file), "--audience", "technical")
+    assert report.returncode == 0, report.stderr
+    text = report.stdout
+    assert "## 结论时间线" in text
+    assert text.index("## 结论时间线") < text.index("## 排查结论")
+    assert "发现/检测" in text
+    assert "开始响应" in text
+    assert "完成止血" in text
+    assert "问题恢复" in text
+    assert "C1" in text
+    assert "E2" in text
 
 
 def test_conclude_warns_on_too_long_tldr(tmp_path: Path) -> None:

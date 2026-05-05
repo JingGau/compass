@@ -158,7 +158,7 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
                 "phase": "action_ready",
                 "confirmed": True,
                 "execution_mode": mode,
-                "allowed_commands": ["next", "action record", "evidence add", "state show"],
+                "allowed_commands": ["next", "scene fact", "action plan", "evidence add", "state show"],
             }
         )
         _touch(state)
@@ -184,13 +184,13 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "phase": phase,
                 "blocked": False,
                 "message": "请先记录场景事实，展开入口、对象、上下游、配置或差异，再基于事实推进查询和假设。",
-                "next_actions": ["scene fact", "action record"],
+                "next_actions": ["scene fact", "action plan"],
             }
         return {
             "phase": phase,
             "blocked": False,
             "message": "已有场景事实，请继续记录查询证据，或从事实/证据派生新假设。",
-            "next_actions": ["action record", "hypothesis add", "scene fact"],
+            "next_actions": ["action plan", "hypothesis add", "scene fact"],
         }
     if phase == "evidence_collecting":
         pending = _pending_actions(state)
@@ -207,14 +207,14 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "phase": phase,
                 "blocked": False,
                 "message": "已有证据，但还缺少场景事实。请先用 scene fact 记录入口、对象、上下游、配置或差异。",
-                "next_actions": ["scene fact", "action record"],
+                "next_actions": ["scene fact", "action plan"],
             }
 
         payload = {
             "phase": phase,
             "blocked": False,
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
-            "next_actions": ["action record", "hypothesis add", "conclude"],
+            "next_actions": ["action plan", "hypothesis add", "conclude"],
         }
         return payload
     if phase == "concluded":
@@ -233,75 +233,6 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "next_actions": ["report"],
         }
     return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": []}
-
-
-def record_action_result(
-    path: str | Path,
-    *,
-    action_id: str,
-    source: str,
-    summary: str,
-    track: str = "manual",
-    action_input: dict[str, str] | None = None,
-    gate: dict[str, str] | None = None,
-    elapsed_ms: int = 0,
-    findings: list[str] | None = None,
-    leads: dict[str, list[str]] | None = None,
-    supports: str | None = None,
-    kind: str | None = None,
-    strength: str = "medium",
-    raw_ref: str | None = None,
-    event_at: str | None = None,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    output: dict[str, Any] = {}
-
-    def mutate(state: dict[str, Any]) -> dict[str, Any]:
-        _require_confirmed(state)
-        _require_phase(state, {"action_ready", "evidence_collecting"}, "记录 action")
-        _require_unique_action_id(state, action_id)
-        if track.lower() != "manual" or action_input or gate:
-            _validate_action_plan_fields(track, action_input or {}, gate or {})
-        evidence = _build_evidence(
-            state,
-            source=source,
-            summary=summary,
-            findings=findings or [],
-            supports=supports,
-            action_id=action_id,
-            kind=kind or _kind_from_track(track),
-            strength=strength,
-            raw_ref=raw_ref,
-            event_at=event_at,
-        )
-        state.setdefault("evidence", []).append(evidence)
-        state.setdefault("action_history", []).append(
-            _build_action_history_item(
-                action_id=action_id,
-                track=track,
-                source=source,
-                action_input=action_input or {},
-                gate=gate or {},
-                summary=summary,
-                findings=findings or [],
-                leads=leads or {},
-                elapsed_ms=elapsed_ms,
-                evidence_id=evidence["id"],
-            )
-        )
-        _mark_hypothesis(state, supports, evidence["id"])
-        state["flow"].update(
-            {
-                "phase": "evidence_collecting",
-                "current_step": "evidence",
-                "allowed_commands": ["next", "action record", "evidence add", "conclude", "state show"],
-            }
-        )
-        _touch(state)
-        output["evidence"] = evidence
-        return state
-
-    state = _update_runtime_state(path, mutate)
-    return state, output["evidence"]
 
 
 def plan_action(
@@ -710,7 +641,7 @@ def add_scene_fact(
             {
                 "phase": "evidence_collecting",
                 "current_step": "scene_discovery",
-                "allowed_commands": ["next", "scene fact", "hypothesis add", "action record", "evidence add", "conclude", "state show"],
+                "allowed_commands": ["next", "scene fact", "hypothesis add", "action plan", "evidence add", "conclude", "state show"],
             }
         )
         _touch(state)

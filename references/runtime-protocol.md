@@ -50,8 +50,6 @@ new
 - `strategy keep` / `strategy discard`：结论后必走的最终查询策略沉淀确认。
 - `kb learn` / `kb suggest` / `kb list` / `kb search`：通用知识库（`memory/knowledge.yaml`）。`learn` 录入一句话事实/规则（≤300 字）；`suggest` 按 query/tags 召回 top-N 并可选 `--increment-hits`；`search` 同时搜 markdown 知识与 yaml 知识。
 
-`action record` 仅作为兼容式事后登记入口，不推荐在新流程使用。
-
 ## Action Lifecycle
 
 每次实际查询、读代码、拉日志前：
@@ -106,7 +104,7 @@ reopen 会把当前 conclusion 写入 `conclusion_history`，标记 `status=supe
 
 ## 强制门禁
 
-- `phase != allowed_commands.contains(cmd)`：runtime 会抛 `CompassRuntimeError`，禁止推进。
+- `phase` 不匹配时，runtime 会抛 `CompassRuntimeError`，禁止推进。
 - `plan_action(track='sql', env='prod')`：必须传 `input.explain_text`，runtime 内部调 `assess_sql_explain` 真验证；中/高风险自动锁住，必须 `action confirm` 后才能 `action complete`。
 - `plan_action(track='sls')`：必须有高区分度实体作为 `anchor`（订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等）；额外关键词必须声明 `keyword_source=code/sql/schema/table_field/code_sql`，禁止 Agent 自己猜业务词。
 - `conclude` 必须满足 8 个结构化字段（`what/where/when/why_technical/why_business/blast_radius/how/inference_chain`），且引用真实存在的 evidence id。
