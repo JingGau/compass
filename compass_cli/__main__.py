@@ -32,7 +32,6 @@ from compass_core.runtime import (
     plan_action,
     record_action_result,
     record_change,
-    record_reflection_answer,
     reopen_session,
     start_session,
 )
@@ -43,7 +42,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 def main(argv: list[str] | None = None) -> int:
-    # 确保 `.env` 中的开关（如 COMPASS_NEXT_ENABLE_*）在命令执行前已注入到 os.environ
+    # 确保 `.env` 中的运行配置在命令执行前已注入到 os.environ
     load_dotenv(PROJECT_ROOT)
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -234,33 +233,6 @@ def build_parser() -> argparse.ArgumentParser:
     timeline_p.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
     timeline_p.add_argument("--json", action="store_true", dest="json_output")
     timeline_p.set_defaults(handler=handle_timeline)
-
-    reflect = subparsers.add_parser(
-        "reflect",
-        help="在 next 触发的根因反思三问之后，落盘自己的回答，便于报告留痕",
-    )
-    reflect_sub = reflect.add_subparsers(dest="reflect_command", required=True)
-    reflect_answer = reflect_sub.add_parser(
-        "answer",
-        help="对根因反思三问中的一题给出回答；question 取值 1/2/3",
-    )
-    reflect_answer.add_argument(
-        "--state-file",
-        default=str(PROJECT_ROOT / "memory" / "session-state.yaml"),
-    )
-    reflect_answer.add_argument(
-        "--question",
-        required=True,
-        choices=("1", "2", "3"),
-        help="对应 next 输出的根因反思三问的索引：1/2/3",
-    )
-    reflect_answer.add_argument(
-        "--answer",
-        required=True,
-        help="一句话回答；落盘后会写入 state.flow.reflection_answers，并在 report 中渲染问答对",
-    )
-    reflect_answer.add_argument("--json", action="store_true", dest="json_output")
-    reflect_answer.set_defaults(handler=handle_reflect_answer)
 
     hypothesis = subparsers.add_parser("hypothesis", help="manage hypotheses derived from evidence and scene facts")
     hypothesis_sub = hypothesis.add_subparsers(dest="hypothesis_command", required=True)
@@ -751,26 +723,6 @@ def handle_timeline(args: argparse.Namespace) -> int:
         print_json(payload)
     else:
         print(format_timeline_text(entries))
-    return 0
-
-
-def handle_reflect_answer(args: argparse.Namespace) -> int:
-    try:
-        state = record_reflection_answer(
-            args.state_file,
-            question_id=args.question,
-            answer=args.answer,
-        )
-    except CompassRuntimeError as exc:
-        return print_error(exc)
-    flow = state.get("flow") or {}
-    answers = flow.get("reflection_answers") or []
-    payload = {"ok": True, "reflection_answers": answers, "state": state}
-    if args.json_output:
-        print_json(payload)
-    else:
-        print(f"已记录反思 Q{args.question}：{args.answer}")
-        print(f"已落盘 {len(answers)} 条反思回答（report 中会渲染问答对）。")
     return 0
 
 

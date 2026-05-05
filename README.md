@@ -340,10 +340,6 @@ python3 -m compass_cli timeline
 python3 -m compass_cli evidence add --source sls --summary "上线后开始出现回调日志缺失" \
   --kind log --strength strong --event-at "2026-04-29 13:30" --change C1
 
-# 落盘根因反思三问的答案（next 触发反思后写）
-python3 -m compass_cli reflect answer --question 1 \
-  --answer "这只是现象，更深一步是 MQ GC 抖动导致 ACK 丢失"
-
 # 输出带 TL;DR / 严重等级 / MTTD-MTTR / 结构化 Action Items 的结论
 python3 -m compass_cli conclude \
   --conclusion "MQ 节点 GC 抖动导致回调未 ACK，订单未推进" \
@@ -377,7 +373,6 @@ python3 -m compass_cli report --audience postmortem
 | 变更登记 | `change record / change list` | 把发布、配置、灰度等变更结构化进 timeline |
 | 故障时间线 | `timeline` + report 头部表 | 把 changes / scene_facts / evidence / actions 按 event_at 排序 |
 | baseline / diff 事实 | `scene fact --category baseline / --category diff` | 显式登记"正常态 vs 异常态"对比，category=diff 强制有对比词 |
-| 根因反思 | `next` 自动输出"反思三问" + `prompts/result-analysis.md` 五问模板 | 防止把"现象"当根因；强制回答"为什么之前没出"和"同类还有谁" |
 | 反证条件 | `hypothesis add --falsifiable "<反证>"` | 让结论可证伪；conclude 时若支持假设缺反证会软警告 |
 | 止血/根治拆分 | `conclude --mitigation ... --remediation ...` | 区分短期止血与长期根治，避免"建议"混作一团 |
 | 未解之谜 | `conclude --unsolved "<开放问题>"` | 显式保留无法在本次定位的疑点 |
@@ -390,9 +385,7 @@ python3 -m compass_cli report --audience postmortem
 | 推断链拆段 | runtime 自动按 →/因为-所以/从…到…使… 把 inference_chain 拆为有序步骤 | 报告渲染为带"步骤号 → 推断 → 引用证据"的表，便于评审 |
 | EXPLAIN 原文回贴 | track sql 时 input.explain_text 自动同步到 gate.explain_text，Action Card fenced 代码块独立显示 | 复盘可一键复制 EXPLAIN 原文，避免"风险等级靠口述" |
 | 变更↔证据连线 | `evidence add --change C1` / `hypothesis add --change C1` | 在 timeline 表用 ⤴ 标识"该证据/假设由哪笔变更引入" |
-| 反思答案落盘 | `compass reflect answer --question 1\|2\|3 --answer "..."` | 把 next 的"根因反思三问"答案落盘到 state.flow.reflection_answers，report 渲染问答对 |
 | Postmortem 事故复盘 | `report --audience postmortem` | 输出十段式复盘：概述/影响/侦测/响应/恢复/根因/行动项/教训/引用/时间线 |
-| 证据链二分定位提示 | `compass next`（evidence_graph 最长简单路径≥3 条边，每会话至多提示一次） | 在 message / JSON `bisect_hint` 中建议于链中间层两侧补对照证据，二分缩小根因范围 |
 
 ## Obsidian 知识库
 

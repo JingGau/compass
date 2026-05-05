@@ -34,7 +34,6 @@ new
 - `timeline`：把所有带 `event_at` 的 changes / scene_facts / evidence 与 action_history 合并为按时间排序的故障时间线。
 - `evidence add`：手工补录证据（用户提供的截图、外部线索等）。可用 `--change C1 --change C2` 把证据关联到一笔或多笔已登记变更，timeline 表会用 ⤴ 标识"变更→证据"连线。
 - `hypothesis add`：基于 scene fact / evidence 派生新假设；不允许凭空假设；推荐用 `--falsifiable` 给出反证条件，可用 `--change C1` 显式关联到引发猜想的变更。
-- `reflect answer`：把 `next` 触发的"根因反思三问"答案落盘到 `state.flow.reflection_answers`，`report` 中会渲染问答对。`--question 1|2|3 --answer "..."`，同 question_id 重复回答则覆盖最新一次。
 - `conclude`：写结构化结论。除原有 5W1H + Inference Chain 外，新增字段：
   - `--mitigation` / `--remediation`（纯文本可重复传）
   - `--mitigation-item` / `--remediation-item`（结构化 `desc=...;owner=...;due=...;url=...;status=...`）
@@ -52,22 +51,6 @@ new
 - `kb learn` / `kb suggest` / `kb list` / `kb search`：通用知识库（`memory/knowledge.yaml`）。`learn` 录入一句话事实/规则（≤300 字）；`suggest` 按 query/tags 召回 top-N 并可选 `--increment-hits`；`search` 同时搜 markdown 知识与 yaml 知识。
 
 `action record` 仅作为兼容式事后登记入口，不推荐在新流程使用。
-
-## 根因反思（next 软门禁）
-
-当 `evidence_collecting` 阶段证据已具备一定深度（≥3 条且至少 1 条 strong/medium，或已有 status=支持 的假设，或已登记 changes），`compass next` 会输出【根因反思三问】：
-
-1. 这是【现象】还是【根因】？把当前结论再问一次 "why"，能不能继续往下挖？
-2. 为什么【之前】没出问题、【现在】才出？把变化点（变更/数据/流量/上游）跟故障窗口对齐。
-3. 同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？
-
-提示只显示一次（`state.flow.reflection_shown=true`），但是否真的回答它取决于 Agent。`prompts/result-analysis.md` 的"根因下钻五问"模板提供更详细的检查清单。
-
-## 证据链二分定位（next 软提示）
-
-当 `state.evidence_graph` 中形成的最长**有向简单路径**边数 ≥ 3（例如 page→api→method→table），`compass next` 会在 JSON 中附加 `bisect_hint`（并将说明合并进 `message` 文本）。每会话至多提示一次（`state.flow.bisect_hint_shown=true`）。
-
-建议含义：在链路**中间层节点**（某一 API、method、trace 等）两侧各补充一条可对照证据，用「对半缩小」方式定位根因，避免只在链两端重复查。
 
 ## Action Lifecycle
 
@@ -113,7 +96,6 @@ reopen 会把当前 conclusion 写入 `conclusion_history`，标记 `status=supe
 4. 若 `gate.requires_confirmation=true`，runtime 会把 action 标记为 `requires_confirmation` 并阻断 `complete`，必须先 `python3 -m compass_cli action confirm --action-id <id>` 由用户解锁。
 5. 执行查询 / 读代码 / 拉日志。
 6. 构造 `tools.action_cards.ActionResult`，输出 `render_after_card(action, result)`。
-7. `action complete` 写入证据后，runtime 自动把 `ActionResult.leads` 同步到 `state.evidence_graph`。
 
 | 轨道 | 执行前必须展示 | 执行后必须提取 |
 |------|----------------|----------------|

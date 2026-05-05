@@ -110,15 +110,7 @@ def render_postmortem_report(state: dict[str, Any]) -> str:
     lines.extend(_render_unsolved_pattern(conclusion))
 
     lines.extend(["## 八、Lessons Learned（经验与反思）", ""])
-    answers = (state.get("flow") or {}).get("reflection_answers") or []
-    if answers:
-        for item in answers:
-            qid = item.get("question_id", "")
-            prompt = item.get("prompt", "")
-            ans = item.get("answer", "")
-            lines.extend([f"- **Q{mask_text(str(qid))}**：{mask_text(prompt)}", f"  - {mask_text(ans)}", ""])
-    else:
-        lines.append("- （未调用 `reflect answer`，可用书面补充本次教训与流程改进要点）")
+    lines.append("- 结合根因与行动项补充本次复盘教训。")
     lines.extend(_render_quality_warnings(conclusion))
 
     lines.extend(["## 九、References（引用与证据）", ""])
@@ -252,16 +244,6 @@ def render_technical_report(state: dict[str, Any]) -> str:
     else:
         lines.append("- 暂无")
 
-    lines.extend(["", "## 证据图"])
-    graph = state.get("evidence_graph") or {}
-    nodes = graph.get("nodes") or []
-    if nodes:
-        lines.extend(["| 类型 | 节点 |", "|------|------|"])
-        for node in nodes:
-            lines.append(f"| {mask_text(node.get('type', ''))} | {mask_text(node.get('id', node.get('value', '')))} |")
-    else:
-        lines.append("暂无")
-
     lines.extend(["", "## Action Plan"])
     action_plan = state.get("action_plan") or []
     if action_plan:
@@ -283,7 +265,6 @@ def render_technical_report(state: dict[str, Any]) -> str:
 
     if conclusion:
         lines.extend(_render_inference_chain(conclusion, details))
-        lines.extend(_render_reflection_qa(state))
         lines.extend(_render_quality_warnings(conclusion))
         lines.extend(_render_mitigation_remediation(conclusion))
         lines.extend(_render_unsolved_pattern(conclusion))
@@ -839,29 +820,6 @@ def _render_inference_chain(conclusion: dict[str, Any], details: dict[str, Any])
             lines.append(f"| {idx} | {mask_text(str(text))} | {mask_text(refs) or '—'} |")
     elif raw_chain.strip():
         lines.extend(["", mask_text(raw_chain.strip())])
-    return lines
-
-
-def _render_reflection_qa(state: dict[str, Any]) -> list[str]:
-    """渲染根因反思的问答（state.flow.reflection_answers 中保存）。"""
-
-    flow = state.get("flow") or {}
-    answers = flow.get("reflection_answers") or []
-    if not answers:
-        return []
-    lines = ["", "## 根因反思（自我盘问）"]
-    for item in answers:
-        q = item.get("question_id") or item.get("question") or "?"
-        prompt = item.get("prompt", "")
-        ans = item.get("answer", "")
-        lines.extend(
-            [
-                "",
-                f"**Q{mask_text(str(q))}：{mask_text(prompt)}**",
-                "",
-                f"> {mask_text(ans)}",
-            ]
-        )
     return lines
 
 

@@ -6,7 +6,6 @@
 
 - `action_cards.py`：执行前 / 门禁 / 执行后的结构化卡片协议（`InvestigationAction` / `SafetyGateResult` / `ActionResult`），由 `compass_core.runtime` 与外层 Agent 共同使用。
 - `sql_gate.py`：解析 Doris/MySQL `EXPLAIN`，输出 low/medium/high 风险判定。`compass_core.runtime.plan_action(track='sql')` 在 prod 环境会强制调用本模块；Agent 不能再通过自报 `gate.status=passed` 绕过。
-- `evidence_graph.py`：沉淀页面、接口、方法、表、key、traceId 等证据节点关系，被 runtime 在 `complete_action` / `record_action_result` 时自动写入。
 - `python_env.py`：自动探测可用 Python（COMPASS_PYTHON / .venv / VIRTUAL_ENV / sys.executable / PATH），生成 venv 与依赖安装建议。
 - `setup_check.py`：检查 `.env`、`CODE_ROOT`、各 adapter profile 是否齐全；`compass_cli setup-check` 的实现入口。
 - `env_config.py`：`.env` 加载与整数环境变量读取的小工具。

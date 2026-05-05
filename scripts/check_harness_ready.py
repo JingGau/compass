@@ -31,7 +31,6 @@ REQUIRED_FILES: tuple[Path, ...] = (
     ROOT / "tools/sql_gate.py",
     ROOT / "tools/setup_check.py",
     ROOT / "tools/python_env.py",
-    ROOT / "tools/evidence_graph.py",
     ROOT / "tools/env_config.py",
     ROOT / "guards/sql-safety.md",
     ROOT / "guards/data-masking.md",

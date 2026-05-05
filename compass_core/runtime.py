@@ -1,15 +1,13 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 import re
 from typing import Any
 
 from compass_core.intake import intake_problem
 from compass_core.state import default_state, now_iso, read_or_init_state, update_state, write_state
-from tools.action_cards import ActionResult, SafetyGateResult
-from tools.evidence_graph import EvidenceGraph, max_simple_path_length_edges, summarize_graph_nodes_for_bisect
+from tools.action_cards import SafetyGateResult
 from tools.sql_gate import assess_sql_explain
 
 
@@ -96,7 +94,6 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
     state["hypothesis_mode"] = "initial_from_intake"
     state["scene_facts"] = []
     state["next_actions"] = intake.next_actions
-    state["evidence_graph"] = {"nodes": [], "edges": []}
     state["applicable_knowledge"] = _recall_applicable_knowledge(intake, top_n=5)
     state["flow"].update(
         {
@@ -108,127 +105,6 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
     )
     write_state(path, state)
     return state
-
-
-def _maybe_reflection_questions(state: dict[str, Any]) -> dict[str, Any] | None:
-    """当证据/假设具备一定深度时，输出"根因反思三问"。
-
-    触发条件（满足任一即提示）：
-        - 证据数 ≥ 3 且 至少 1 条 strong/medium 级别证据；
-        - 至少 1 个 status=支持 的假设；
-        - 已登记变更（state.changes 非空）。
-
-    若三问已展示过（state.flow.reflection_shown），则不重复打扰。
-    """
-
-    flow = state.get("flow") or {}
-    if flow.get("reflection_shown"):
-        return None
-    evidence = state.get("evidence") or []
-    if not evidence:
-        return None
-
-    strong_count = sum(
-        1
-        for e in evidence
-        if str(e.get("kind", "")).lower() in _STRONG_KINDS
-        and str(e.get("strength", "")).lower() in _STRONG_STRENGTHS
-    )
-    hypotheses = state.get("hypotheses") or []
-    supported = [
-        h
-        for h in hypotheses
-        if str(h.get("status", "")).lower() in {"支持", "supported"}
-    ]
-    has_changes = bool(state.get("changes"))
-
-    trigger = (len(evidence) >= 3 and strong_count >= 1) or supported or has_changes
-    if not trigger:
-        return None
-
-    questions = [
-        "1) 这是【现象】还是【根因】？把当前结论再问一次 'why'，能不能继续往下挖？",
-        "2) 为什么【之前】没出问题、【现在】才出？把'变化点'（变更/数据/流量/上游）跟故障窗口对齐。",
-        "3) 同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？",
-    ]
-    state["flow"]["reflection_shown"] = True
-    path = state.get("__path__")
-    if path:
-        def mark_reflection_shown(current: dict[str, Any]) -> dict[str, Any]:
-            current.setdefault("flow", {})["reflection_shown"] = True
-            _touch(current)
-            return current
-
-        _update_runtime_state(path, mark_reflection_shown)
-    return {
-        "phase": "evidence_collecting",
-        "blocked": False,
-        "message": (
-            "证据已具备一定深度，请先做【根因反思三问】，再决定是否输出 conclude：\n"
-            + "\n".join(questions)
-        ),
-        "reflection": questions,
-        "next_actions": [
-            "scene fact (category=baseline 或 diff，把'之前/正常'与'之后/异常'对比写下来)",
-            "change record (登记疑似引发本次问题的变更)",
-            "hypothesis add (把反思中浮现的新猜想登记)",
-            "conclude (若三问都过得去则可以输出结论)",
-        ],
-    }
-
-
-REFLECTION_QUESTIONS = {
-    "1": "这是【现象】还是【根因】？把当前结论再问一次 'why'，能不能继续往下挖？",
-    "2": "为什么【之前】没出问题、【现在】才出？把'变化点'（变更/数据/流量/上游）跟故障窗口对齐。",
-    "3": "同一根因还会影响哪些【相邻入口/数据/链路】？同类是不是也已经/即将出问题？",
-}
-
-
-def record_reflection_answer(
-    path: str | Path,
-    *,
-    question_id: str,
-    answer: str,
-) -> dict[str, Any]:
-    """落盘一条根因反思的回答，写入 state.flow.reflection_answers。
-
-    Args:
-        question_id: 1/2/3，对应根因反思三问的索引；
-        answer: AI 或排查者本人对该问题的回答；不能为空。
-
-    同一 question_id 重复回答时覆盖最新一次回答。
-    """
-
-    qid = str(question_id).strip()
-    if qid not in REFLECTION_QUESTIONS:
-        raise CompassRuntimeError(
-            f"未知 question_id：{question_id}。可选：{', '.join(REFLECTION_QUESTIONS.keys())}（对应根因反思三问）。"
-        )
-    text = str(answer or "").strip()
-    if not text:
-        raise CompassRuntimeError("reflection.answer 不能为空，请用一句话写清你对该问题的判断。")
-
-    def mutate(state: dict[str, Any]) -> dict[str, Any]:
-        flow = state.setdefault("flow", {})
-        answers = flow.setdefault("reflection_answers", [])
-        item = {
-            "question_id": qid,
-            "prompt": REFLECTION_QUESTIONS[qid],
-            "answer": text,
-            "answered_at": now_iso(),
-        }
-        replaced = False
-        for idx, existing in enumerate(answers):
-            if str(existing.get("question_id", "")).strip() == qid:
-                answers[idx] = item
-                replaced = True
-                break
-        if not replaced:
-            answers.append(item)
-        _touch(state)
-        return state
-
-    return _update_runtime_state(path, mutate)
 
 
 def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[str, Any]]:
@@ -291,93 +167,6 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
     return _update_runtime_state(path, mutate)
 
 
-BISECT_HINT_MIN_CHAIN_EDGES = 3
-
-
-def _maybe_attach_bisect_hint(path: str | Path, state: dict[str, Any], payload: dict[str, Any]) -> None:
-    """当证据图中最长链路边数≥阈值时在 next 载荷中附上「二分定位」建议（每会话至多一次）。
-
-    「深度」：有向图上简单路径的边数的最大值。"""
-    graph = state.get("evidence_graph") or {"nodes": [], "edges": []}
-    depth = max_simple_path_length_edges(graph)
-    if depth < BISECT_HINT_MIN_CHAIN_EDGES:
-        return
-    flow = state.setdefault("flow", {})
-    if flow.get("bisect_hint_shown"):
-        return
-
-    preview_items = summarize_graph_nodes_for_bisect(graph)
-    preview = ""
-    if preview_items:
-        preview = "; ".join(
-            f"{t}:{(val[:42] + '…') if len(val) > 42 else val}" for t, val in preview_items[:8]
-        )
-
-    hint_text = (
-        f"【二分定位建议】证据图中已出现关联深度≥{BISECT_HINT_MIN_CHAIN_EDGES}（当前最长约 "
-        f"{depth} 条边）。请在链路上的**中间层节点**两侧各补充一条可追溯证据——例如：在中间 API 或服务方法处"
-        f"对上/下游各查一条同源 trace、或各采一条与时间窗匹配的日志/SQL——用对照缩小一半可疑范围。"
-    )
-    if preview:
-        hint_text += f" 节点取样：{preview}"
-
-    payload["bisect_hint"] = {
-        "triggered": True,
-        "max_chain_edges": depth,
-        "threshold_edges": BISECT_HINT_MIN_CHAIN_EDGES,
-        "message": hint_text,
-    }
-    flow["bisect_hint_shown"] = True
-    base_msg = str(payload.get("message") or "").rstrip()
-    payload["message"] = (base_msg + "\n\n" + hint_text) if base_msg else hint_text
-
-    def mark_bisect_hint_shown(current: dict[str, Any]) -> dict[str, Any]:
-        current.setdefault("flow", {})["bisect_hint_shown"] = True
-        _touch(current)
-        return current
-
-    _update_runtime_state(path, mark_bisect_hint_shown)
-
-
-DEFAULT_HARNESS_OPTIONS: dict[str, Any] = {
-    "next": {
-        "enable_reflection_questions": False,
-        "enable_bisect_hint": False,
-    }
-}
-
-
-def _load_harness_options(path: str | Path) -> dict[str, Any]:
-    """加载可控开关（主要用于降低现场流程负担）。
-
-    现在的规则是：默认全部关闭；只有在用户显式在 `.env`（环境变量）中设置对应布尔值时才会打开。
-
-    env vars（只认这两项；其他都忽略）：
-        - COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS: true/false
-        - COMPASS_NEXT_ENABLE_BISECT_HINT: true/false
-    """
-
-    def _parse_env_bool(name: str) -> bool | None:
-        raw = os.environ.get(name)
-        if raw is None:
-            return None
-        v = str(raw).strip().lower()
-        if v in {"true", "1", "yes", "y", "on"}:
-            return True
-        if v in {"false", "0", "no", "n", "off"}:
-            return False
-        return None
-
-    next_opts = DEFAULT_HARNESS_OPTIONS.get("next", {}).copy()
-    v1 = _parse_env_bool("COMPASS_NEXT_ENABLE_REFLECTION_QUESTIONS")
-    v2 = _parse_env_bool("COMPASS_NEXT_ENABLE_BISECT_HINT")
-    if v1 is not None:
-        next_opts["enable_reflection_questions"] = v1
-    if v2 is not None:
-        next_opts["enable_bisect_hint"] = v2
-    return {"next": next_opts}
-
-
 def next_step(path: str | Path) -> dict[str, Any]:
     state = _load_state(path)
     state["__path__"] = str(path)
@@ -421,24 +210,12 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "next_actions": ["scene fact", "action record"],
             }
 
-        harness_opts = _load_harness_options(path)
-        next_opts = harness_opts.get("next") if isinstance(harness_opts.get("next"), dict) else {}
-        enable_reflection = bool(next_opts.get("enable_reflection_questions", True))
-        enable_bisect = bool(next_opts.get("enable_bisect_hint", True))
-
-        reflection = _maybe_reflection_questions(state) if enable_reflection else None
-        if reflection is not None:
-            if enable_bisect:
-                _maybe_attach_bisect_hint(path, state, reflection)
-            return reflection
         payload = {
             "phase": phase,
             "blocked": False,
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
             "next_actions": ["action record", "hypothesis add", "conclude"],
         }
-        if enable_bisect:
-            _maybe_attach_bisect_hint(path, state, payload)
         return payload
     if phase == "concluded":
         review = state.get("strategy_review") or {}
@@ -512,7 +289,6 @@ def record_action_result(
             )
         )
         _mark_hypothesis(state, supports, evidence["id"])
-        _add_action_leads(state, action_id, summary, findings or [], leads or {})
         state["flow"].update(
             {
                 "phase": "evidence_collecting",
@@ -694,7 +470,6 @@ def complete_action(
         action["completed_at"] = now_iso()
         action["evidence_id"] = evidence["id"]
         _mark_hypothesis(state, supports, evidence["id"])
-        _add_action_leads(state, action_id, summary, findings or [], leads or {})
         state["flow"].update(
             {
                 "phase": "evidence_collecting",
@@ -1970,39 +1745,6 @@ def _mark_hypothesis(state: dict[str, Any], hypothesis_id: str | None, evidence_
         state.setdefault("hypotheses", []).append(
             {"id": hypothesis_id, "statement": "用户补充的临时假设", "status": "支持", "evidence": [evidence_id]}
         )
-
-
-def _add_action_leads(
-    state: dict[str, Any],
-    action_id: str,
-    summary: str,
-    findings: list[str],
-    leads: dict[str, list[str]],
-) -> None:
-    graph = EvidenceGraph()
-    for node in state.get("evidence_graph", {}).get("nodes", []):
-        graph.add_node(str(node.get("type", "unknown")), str(node.get("value", "")))
-    for edge in state.get("evidence_graph", {}).get("edges", []):
-        from_type, from_value = _split_node_id(str(edge.get("from", "")))
-        to_type, to_value = _split_node_id(str(edge.get("to", "")))
-        graph.link(from_type, from_value, to_type, to_value, str(edge.get("relation", "links")))
-    result = ActionResult(
-        status="success",
-        elapsed_ms=0,
-        summary=summary,
-        key_findings=findings,
-        leads=leads,
-        next_actions=[],
-    )
-    graph.add_result_leads(action_id, result)
-    state["evidence_graph"] = graph.to_dict()
-
-
-def _split_node_id(node_id: str) -> tuple[str, str]:
-    node_type, separator, value = node_id.partition(":")
-    if not separator:
-        return "unknown", node_id
-    return node_type, value
 
 
 def _touch(state: dict[str, Any]) -> None:
