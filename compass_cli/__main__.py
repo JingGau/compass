@@ -89,6 +89,20 @@ def build_parser() -> argparse.ArgumentParser:
     action_plan.add_argument("--success-criteria", required=True)
     action_plan.add_argument("--input", action="append", default=[])
     action_plan.add_argument("--gate", action="append", default=[])
+    action_plan.add_argument(
+        "--playbook",
+        action="append",
+        default=[],
+        dest="playbooks",
+        help="本 action 采用的通用 playbook，可重复传",
+    )
+    action_plan.add_argument(
+        "--knowledge",
+        action="append",
+        default=[],
+        dest="knowledge",
+        help="本 action 采用的通用知识 id，可重复传",
+    )
     action_plan.add_argument("--json", action="store_true", dest="json_output")
     action_plan.set_defaults(handler=handle_action_plan)
 
@@ -534,6 +548,8 @@ def handle_action_plan(args: argparse.Namespace) -> int:
             success_criteria=args.success_criteria,
             action_input=parse_pairs(args.input),
             gate=parse_pairs(args.gate),
+            applied_playbooks=args.playbooks,
+            applied_knowledge=args.knowledge,
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
@@ -659,6 +675,10 @@ def _action_plan_command(action: dict[str, Any]) -> str:
         if key == "explain_text":
             continue
         parts.extend(["--gate", f"{key}={value}"])
+    for value in action.get("applied_playbooks") or []:
+        parts.extend(["--playbook", str(value)])
+    for value in action.get("applied_knowledge") or []:
+        parts.extend(["--knowledge", str(value)])
     return _command(parts)
 
 

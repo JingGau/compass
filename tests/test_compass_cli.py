@@ -1362,6 +1362,91 @@ def test_action_plan_json_includes_display_contract(tmp_path: Path) -> None:
     assert display["after"].startswith("结果：")
 
 
+def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    completed = run_planned_action(state_file, json_output=True)
+
+    assert completed.returncode == 0, completed.stderr
+    state = json.loads(completed.stdout)["state"]
+    event_types = [event["type"] for event in state["events"]]
+    assert event_types[:4] == ["session_started", "session_confirmed", "scene_fact_recorded", "action_planned"]
+    assert event_types[-1] == "action_completed"
+    assert state["events"][-1]["summary"] == "查询完成"
+    assert state["events"][-1]["refs"]["action_id"] == "A1"
+    assert state["events"][-1]["refs"]["evidence_id"] == "E1"
+
+
+def test_action_plan_records_applied_playbooks_and_knowledge(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "playbook",
+        "--objective",
+        "按通用知识检查是否只是半原因",
+        "--success-criteria",
+        "结论前补最近变更证据",
+        "--playbook",
+        "direct-failure-to-change-root-cause",
+        "--knowledge",
+        "K001",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    payload = json.loads(planned.stdout)
+    action = payload["action"]
+    assert action["applied_playbooks"] == ["direct-failure-to-change-root-cause"]
+    assert action["applied_knowledge"] == ["K001"]
+    assert "--playbook direct-failure-to-change-root-cause" in payload["display"]["command_raw"]
+
+
+def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "用户补充",
+        "--objective",
+        "确认用户端操作路径",
+        "--success-criteria",
+        "用户确认 App 切换支付方式后礼品卡消失",
+    )
+    assert planned.returncode == 0, planned.stderr
+
+    result = run_cli("next", "--state-file", str(state_file), "--json")
+
+    assert result.returncode == 0, result.stderr
+    health = json.loads(result.stdout)["next"]["health"]
+    assert health["pending_actions"] == 1
+    assert health["scene_facts"] == 1
+    assert "pending_actions" in health["quality_flags"]
+
+
 def test_sls_generic_keywords_can_be_configured_by_environment(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("COMPASS_SLS_GENERIC_KEYWORDS", "payment-ways-v2")
     state_file = tmp_path / "session.json"
@@ -3196,6 +3281,78 @@ def test_conclude_quality_warnings_for_high_confidence_without_strong_evidence(t
     assert "CONF_GATE" in codes
     assert "NO_MITIGATION" in codes
     assert "NO_REMEDIATION" in codes
+
+
+def test_conclude_warns_when_direct_failure_has_no_change_evidence(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "某把枪突然充电校验失败", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        "object",
+        "--name",
+        "gun",
+        "--value",
+        "单枪充电校验失败",
+        "--source",
+        "用户问题",
+    )
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "日志显示枪 TCP 连接连不上网关",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+    )
+
+    res = run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "充电校验失败是因为枪 TCP 连接连不上网关",
+        "--evidence",
+        "E1",
+        "--confidence",
+        "medium",
+        "--what",
+        "单枪充电校验失败",
+        "--where",
+        "charge-server GunGatewayService#validateBeforeCharge 到 gateway-tcp 链路",
+        "--when",
+        "2026-04-29 14:32 开始",
+        "--why-technical",
+        "枪 TCP 连接连不上网关导致校验失败",
+        "--why-business",
+        "用户发起充电校验",
+        "--blast-radius",
+        "影响单把枪",
+        "--how",
+        "用户发起充电 → 枪连接网关失败 → 校验失败",
+        "--inference-chain",
+        "SLS 日志显示 TCP 连不上网关 → 因链路不可达 → 导致充电校验失败",
+        "--mitigation",
+        "先切回可达网关或通知运维恢复连接",
+        "--remediation",
+        "补充网关变更校验和配置同步检查",
+        "--json",
+    )
+
+    assert res.returncode == 0, res.stderr
+    warnings = json.loads(res.stdout)["state"]["conclusion"]["quality_warnings"]
+    codes = {w["code"] for w in warnings}
+    assert "HALF_ROOT_CAUSE" in codes
 
 
 def test_conclude_with_mitigation_and_remediation_persists(tmp_path: Path) -> None:

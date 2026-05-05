@@ -104,6 +104,12 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
             "current_step": "intake",
         }
     )
+    _append_event(
+        state,
+        "session_started",
+        summary=state["problem"]["standard"],
+        refs={"session_id": state["session_id"], "phase": "awaiting_confirmation"},
+    )
     write_state(path, state)
     return state
 
@@ -162,6 +168,7 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
                 "allowed_commands": ["next", "scene fact", "action plan", "evidence add", "state show"],
             }
         )
+        _append_event(state, "session_confirmed", summary=f"mode={mode}", refs={"phase": "action_ready"})
         _touch(state)
         return state
 
@@ -178,6 +185,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "blocked": True,
             "message": "会话尚未确认执行模式。请先运行 compass confirm。",
             "next_actions": ["confirm"],
+            "health": _build_session_health(state),
         }
     if phase == "action_ready":
         if not state.get("scene_facts"):
@@ -186,12 +194,14 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "blocked": False,
                 "message": "请先记录场景事实，展开入口、对象、上下游、配置或差异，再基于事实推进查询和假设。",
                 "next_actions": ["scene fact", "action plan"],
+                "health": _build_session_health(state),
             }
         return {
             "phase": phase,
             "blocked": False,
             "message": "已有场景事实，请继续记录查询证据，或从事实/证据派生新假设。",
             "next_actions": ["action plan", "hypothesis add", "scene fact"],
+            "health": _build_session_health(state),
         }
     if phase == "evidence_collecting":
         pending = _pending_actions(state)
@@ -202,6 +212,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "blocked": False,
                 "message": f"存在待完成 action：{action_ids}。请先完成或明确改计划，再继续生成新结论。",
                 "next_actions": [f"action complete {item.get('action_id')}" for item in pending],
+                "health": _build_session_health(state),
             }
         if not state.get("scene_facts"):
             return {
@@ -209,6 +220,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "blocked": False,
                 "message": "已有证据，但还缺少场景事实。请先用 scene fact 记录入口、对象、上下游、配置或差异。",
                 "next_actions": ["scene fact", "action plan"],
+                "health": _build_session_health(state),
             }
 
         payload = {
@@ -216,6 +228,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "blocked": False,
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
             "next_actions": ["action plan", "hypothesis add", "conclude"],
+            "health": _build_session_health(state),
         }
         return payload
     if phase == "concluded":
@@ -224,6 +237,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "blocked": False,
             "message": "排查已输出结论。请先生成报告，再确认是否保留本次最终查询策略。",
             "next_actions": ["report"],
+            "health": _build_session_health(state),
         }
     if phase == "reported":
         review = state.get("strategy_review") or {}
@@ -233,14 +247,16 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "blocked": False,
                 "message": "报告已生成。请确认是否保留本次最终查询策略。",
                 "next_actions": ["strategy keep", "strategy discard"],
+                "health": _build_session_health(state),
             }
         return {
             "phase": phase,
             "blocked": False,
             "message": "排查已结束。可查看报告，或在新信息出现时 reopen。",
             "next_actions": ["report", "reopen"],
+            "health": _build_session_health(state),
         }
-    return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": []}
+    return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": [], "health": _build_session_health(state)}
 
 
 def plan_action(
@@ -253,6 +269,8 @@ def plan_action(
     success_criteria: str,
     action_input: dict[str, str] | None = None,
     gate: dict[str, str] | None = None,
+    applied_playbooks: list[str] | None = None,
+    applied_knowledge: list[str] | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     output: dict[str, Any] = {}
 
@@ -283,6 +301,12 @@ def plan_action(
             "status": "planned",
             "created_at": now_iso(),
         }
+        playbooks = _clean_list(applied_playbooks)
+        knowledge = _clean_list(applied_knowledge)
+        if playbooks:
+            action["applied_playbooks"] = playbooks
+        if knowledge:
+            action["applied_knowledge"] = knowledge
         if sql_gate_result and sql_gate_result.requires_confirmation:
             action["status"] = "requires_confirmation"
             action["pending_confirmation"] = {
@@ -312,6 +336,17 @@ def plan_action(
                 "current_step": "action_planning",
                 "allowed_commands": allowed,
             }
+        )
+        _append_event(
+            state,
+            "action_planned",
+            summary=objective,
+            refs={
+                "action_id": action_id,
+                "track": normalized_track,
+                "status": action["status"],
+                "phase": "evidence_collecting",
+            },
         )
         _touch(state)
         output["action"] = action
@@ -345,6 +380,12 @@ def confirm_action(
         state["pending_confirmations"] = [
             item for item in pending if str(item.get("action_id")) != action_id
         ]
+        _append_event(
+            state,
+            "action_confirmed",
+            summary=note or f"action {action_id} risk confirmed",
+            refs={"action_id": action_id, "phase": _phase(state)},
+        )
         _touch(state)
         output["action"] = action
         return state
@@ -420,6 +461,12 @@ def complete_action(
                 "allowed_commands": ["next", "action plan", "action complete", "evidence add", "hypothesis add", "conclude", "state show"],
             }
         )
+        _append_event(
+            state,
+            "action_completed",
+            summary=summary,
+            refs={"action_id": action_id, "evidence_id": evidence["id"], "phase": "evidence_collecting"},
+        )
         _touch(state)
         output["evidence"] = evidence
         return state
@@ -476,6 +523,12 @@ def add_evidence(
         )
         _mark_hypothesis(state, supports, evidence["id"])
         state["flow"]["phase"] = "evidence_collecting"
+        _append_event(
+            state,
+            "evidence_recorded",
+            summary=summary,
+            refs={"evidence_id": evidence["id"], "phase": "evidence_collecting"},
+        )
         _touch(state)
         output["evidence"] = evidence
         return state
@@ -544,6 +597,12 @@ def record_change(
                 "current_step": "change_logging",
             }
         )
+        _append_event(
+            state,
+            "change_recorded",
+            summary=record["description"],
+            refs={"change_id": change_id, "change_type": normalized_type, "phase": "evidence_collecting"},
+        )
         _touch(state)
         output["record"] = record
         return state
@@ -577,6 +636,12 @@ def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
                 "report_generated": False,
                 "allowed_commands": ["next", "action plan", "action complete", "evidence add", "scene fact", "hypothesis add", "conclude", "state show"],
             }
+        )
+        _append_event(
+            state,
+            "session_reopened",
+            summary=reason,
+            refs={"revision": state["revision"], "phase": "evidence_collecting"},
         )
         _touch(state)
         return state
@@ -657,6 +722,12 @@ def add_scene_fact(
                 "allowed_commands": ["next", "scene fact", "hypothesis add", "action plan", "evidence add", "conclude", "state show"],
             }
         )
+        _append_event(
+            state,
+            "scene_fact_recorded",
+            summary=f"{normalized_category}.{name}={value}",
+            refs={"fact": name, "category": normalized_category, "phase": "evidence_collecting"},
+        )
         _touch(state)
         return state
 
@@ -710,6 +781,12 @@ def add_hypothesis(
         else:
             state.setdefault("hypotheses", []).append(hypothesis)
         state["hypothesis_mode"] = "evidence_first"
+        _append_event(
+            state,
+            "hypothesis_recorded",
+            summary=statement,
+            refs={"hypothesis_id": hypothesis_id, "phase": _phase(state)},
+        )
         _touch(state)
         return state
 
@@ -936,6 +1013,12 @@ def conclude_session(
                 "allowed_commands": ["report", "reopen", "state show"],
             }
         )
+        _append_event(
+            state,
+            "conclusion_recorded",
+            summary=conclusion,
+            refs={"phase": "concluded", "evidence": list(evidence_ids)},
+        )
         _touch(state)
         return state
 
@@ -956,6 +1039,12 @@ def mark_report_generated(path: str | Path, *, audience: str) -> dict[str, Any]:
                 "report_generated_at": now_iso(),
                 "allowed_commands": ["strategy keep", "strategy discard", "reopen", "state show"],
             }
+        )
+        _append_event(
+            state,
+            "report_generated",
+            summary=f"audience={audience}",
+            refs={"phase": "reported", "audience": audience},
         )
         _touch(state)
         return state
@@ -978,6 +1067,22 @@ _CAUSAL_CONNECTORS = (
     "故",
     "→",
     "->",
+)
+
+_DIRECT_FAILURE_TERMS = (
+    "连不上",
+    "不可达",
+    "连接失败",
+    "连接不上",
+    "超时",
+    "无响应",
+    "离线",
+    "心跳中断",
+    "校验失败",
+    "timeout",
+    "unreachable",
+    "connection refused",
+    "connection failed",
 )
 
 
@@ -1139,6 +1244,26 @@ def _assess_conclusion_quality(
             }
         )
 
+    conclusion_text = " ".join(
+        [
+            str(summary or ""),
+            str((details or {}).get("why_technical", "")),
+            str((details or {}).get("inference_chain", "")),
+        ]
+    ).lower()
+    if _looks_like_direct_failure(conclusion_text) and not _has_change_evidence(state, evidence_ids):
+        warnings.append(
+            {
+                "code": "HALF_ROOT_CAUSE",
+                "level": "warn",
+                "message": (
+                    "当前结论像是只定位到连接失败、不可达、超时、离线或校验失败等直接断点；"
+                    "建议继续登记最近发布、配置、网关地址、证书、白名单、DNS、路由、绑定或迁移变更，"
+                    "并用时间线、影响面和反证判断它是否是真正根因。"
+                ),
+            }
+        )
+
     return warnings
 
 
@@ -1182,6 +1307,12 @@ def decide_strategy_review(
                 "current_step": "strategy_review",
                 "allowed_commands": ["report", "reopen", "state show"],
             }
+        )
+        _append_event(
+            state,
+            "strategy_decided",
+            summary=note or decision["status"],
+            refs={"status": decision["status"], "phase": _phase(state)},
         )
         _touch(state)
         output["review"] = review
@@ -1598,6 +1729,7 @@ def _prepare_runtime_state(state: dict[str, Any]) -> dict[str, Any]:
     state.setdefault("flow", {})
     state["flow"].setdefault("phase", "new")
     state["flow"].setdefault("confirmed", False)
+    state.setdefault("events", [])
     return state
 
 
@@ -1660,6 +1792,38 @@ def _pending_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in state.get("action_plan", []) if item.get("status") == "planned"]
 
 
+def _build_session_health(state: dict[str, Any]) -> dict[str, Any]:
+    pending_count = len(_pending_actions(state))
+    scene_count = len(state.get("scene_facts") or [])
+    evidence_count = len(state.get("evidence") or [])
+    change_count = len(state.get("changes") or [])
+    open_hypotheses = [
+        h
+        for h in state.get("hypotheses") or []
+        if str(h.get("status", "")).lower() in {"待验证", "相关", "pending", "related"}
+    ]
+    conclusion_warnings = (state.get("conclusion") or {}).get("quality_warnings") or []
+    flags: list[str] = []
+    if pending_count:
+        flags.append("pending_actions")
+    if evidence_count and not change_count:
+        flags.append("no_changes_recorded")
+    if open_hypotheses:
+        flags.append("open_hypotheses")
+    if any(str(w.get("code")) == "HALF_ROOT_CAUSE" for w in conclusion_warnings):
+        flags.append("possible_half_root_cause")
+    return {
+        "phase": _phase(state),
+        "scene_facts": scene_count,
+        "evidence": evidence_count,
+        "changes": change_count,
+        "pending_actions": pending_count,
+        "open_hypotheses": len(open_hypotheses),
+        "events": len(state.get("events") or []),
+        "quality_flags": flags,
+    }
+
+
 def _build_action_history_item(
     *,
     action_id: str,
@@ -1691,6 +1855,30 @@ def _build_action_history_item(
             "evidence_id": evidence_id,
         },
     }
+
+
+def _clean_list(values: list[str] | None) -> list[str]:
+    return [str(value).strip() for value in (values or []) if str(value).strip()]
+
+
+def _append_event(
+    state: dict[str, Any],
+    event_type: str,
+    *,
+    summary: str = "",
+    refs: dict[str, Any] | None = None,
+) -> None:
+    events = state.setdefault("events", [])
+    event = {
+        "type": event_type,
+        "created_at": now_iso(),
+        "phase": _phase(state),
+        "summary": str(summary or "").strip(),
+        "refs": refs or {},
+    }
+    events.append(event)
+    if len(events) > 200:
+        del events[:-200]
 
 
 def _build_evidence(
@@ -1750,6 +1938,24 @@ def _require_existing_changes(state: dict[str, Any], change_ids: list[str]) -> N
 def _kind_from_track(track: str) -> str:
     normalized = track.lower()
     return normalized if normalized in {"log", "sql", "code", "kb", "manual"} else {"sls": "log"}.get(normalized, "manual")
+
+
+def _looks_like_direct_failure(text: str) -> bool:
+    lowered = str(text or "").lower()
+    return any(term.lower() in lowered for term in _DIRECT_FAILURE_TERMS)
+
+
+def _has_change_evidence(state: dict[str, Any], evidence_ids: list[str]) -> bool:
+    if state.get("changes"):
+        return True
+    referenced = {str(eid) for eid in evidence_ids}
+    for evidence in state.get("evidence") or []:
+        if str(evidence.get("id")) in referenced and evidence.get("change_ids"):
+            return True
+    for hypothesis in state.get("hypotheses") or []:
+        if hypothesis.get("source_changes"):
+            return True
+    return False
 
 
 def _mark_hypothesis(state: dict[str, Any], hypothesis_id: str | None, evidence_id: str) -> None:

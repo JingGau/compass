@@ -29,10 +29,11 @@ new
 ## 核心命令
 
 - `start` / `confirm` / `next`：进入排查、确认执行模式、获取下一步建议。`start` 会自动从 `memory/knowledge.yaml` 召回 top-5 相关知识写入 `state.applicable_knowledge`，并把它们加入 hits 计数。
+- `next --json`：除下一步建议外，还返回轻量 `health` 摘要：scene/evidence/change/pending action/open hypothesis/events 计数，以及 `pending_actions`、`no_changes_recorded`、`open_hypotheses`、`possible_half_root_cause` 等质量标记。
 - `confirm --mode auto`：首轮人工确认后由 Agent 自动推进后续流程；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。`confirm --mode manual` 才要求每一步查询前等待用户确认。
 - Agent 自动模式直接调用 SLS/Doris adapter 时，必须带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置 `COMPASS_AGENT_AUTO`，不受该保护影响。
 - `scene fact`：在记录假设或写结论前，先用 `category=entrypoint/object/upstream/downstream/config/variant/diff/baseline/repro` 把可引用事实落盘；`category=diff` 强制 value 含对比词（差异/对比/vs/相比/之前/之后/正常/异常/变更等）；建议带 `--event-at` 让事实进入 timeline。
-- `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
+- `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，可用 `--playbook` / `--knowledge` 记录采用的通用上下文；`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
 - `action confirm`：仅当 `plan` 因 SQL 风险等门禁被锁为 `requires_confirmation` 时使用，由用户明确确认风险后解锁。
 - `change record` / `change list`：登记发布、配置、数据迁移、灰度、权限调整等变更，必填 `--type/--target/--description/--event-at`，进入 timeline 与故障窗口对齐。
 - `timeline`：把所有带 `event_at` 的 changes / scene_facts / evidence 与 action_history 合并为按时间排序的故障时间线。
@@ -47,8 +48,9 @@ new
   - `--tldr "<≤3 句执行摘要>"`：给非技术决策者一眼看完，超 3 句会触发 `TLDR_TOO_LONG` 警告
   - `--severity sev1|sev2|sev3|sev4`：不传则按 blast_radius 启发式推荐
   - `--detected-at / --acknowledged-at / --mitigated-at / --resolved-at`：用于报告头部的 MTTD/MTTM/MTTR 时序表（MTTM = acknowledged → mitigated）
-  会输出 `quality_warnings`：confidence=high 缺强证据 / 推断链缺因果连接词 / mitigation 或 remediation 为空 / 根治项缺 owner / 支持的假设缺 falsifiable / 存在 status=支持 的假设但 conclude 未引用 / TL;DR 超过 3 句 等情况。
+  会输出 `quality_warnings`：confidence=high 缺强证据 / 推断链缺因果连接词 / mitigation 或 remediation 为空 / 根治项缺 owner / 支持的假设缺 falsifiable / 存在 status=支持 的假设但 conclude 未引用 / TL;DR 超过 3 句 / 只找到直接断点但缺少变更证据（`HALF_ROOT_CAUSE`）等情况。
   runtime 同时会自动把 `inference_chain` 按 → / 因为-所以 / 从…到…使… 拆为 `inference_steps`，报告会渲染为有序步骤表。
+- 所有关键写状态动作会追加短事件到 `state.events`，用于审计流程是否跳步；events 不存大查询结果，只存类型、时间、摘要和引用 id。
 - `reopen`：进入新 revision；旧 conclusion 自动归档到 `conclusion_history`。
 - `report`：按 `--audience technical|business|review|postmortem` 渲染 Markdown。结论后的第一次 report 会把 phase 推进到 `reported`，并记录 `flow.report_generated=true`。`postmortem` 为事故复盘十段式（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline），内容与 technical 共用同一套 state，仅章节编排不同。
 - `strategy keep` / `strategy discard`：报告后必走的最终查询策略沉淀确认；未生成 report 会被 runtime 拒绝。

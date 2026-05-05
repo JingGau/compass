@@ -248,6 +248,8 @@ scene fact -> action plan -> action complete -> hypothesis add -> conclude -> re
 
 Runtime 会硬拦截关键顺序：没有 `scene fact` 不能 `action plan`；`conclude` 后必须先生成 `report`，才能 `strategy keep/discard`；结论后要补证据只能 `reopen`。
 
+Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事件（最多保留 200 条短记录），`next --json` 返回 `health` 摘要，包含 scene/evidence/change/pending action/open hypothesis 数量和质量提示标记。
+
 对话中的确认方式：
 
 - 回复 `0` 或“开始/确认/可以”：进入自动模式，Agent 按证据链持续推进。
@@ -276,6 +278,8 @@ python3 -m compass_cli action plan \
   --gate "type=sls" \
   --gate "status=passed" \
   --gate "keyword_source=code" \
+  --playbook "known-page-or-bff-to-link" \
+  --knowledge "K001" \
   --json
 
 python3 -m compass_cli action complete \
@@ -303,6 +307,8 @@ python3 -m compass_cli report --audience review
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
 - `action plan/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
+- `action plan` 可选 `--playbook` / `--knowledge` 记录本步采用的通用 playbook 或知识 id，便于审计“为什么这么查”。
+- 结论若只定位到连接失败、不可达、超时、离线、校验失败等直接断点，却没有登记变更或变更证据，会触发 `HALF_ROOT_CAUSE` 质量提示；这是软告警，不阻塞，但建议继续追最近变更、时间线、影响面和反证。
 - SQL 行数阈值和 SLS 词表可通过 `.env` 调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。
 - `COMPASS_NON_PROD_RELAX_GATES=1` 只放宽非生产环境门禁；prod 的 Doris EXPLAIN、SLS anchor、keyword_source 仍强制执行。
 

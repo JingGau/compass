@@ -111,6 +111,9 @@ python3 -m compass_cli timeline
 - SLS 未指定时间窗时 runtime/adapter 默认查最近一周（`-7d`）；如果能从订单创建、支付创建、事件发生时间等证据推断时间窗，应使用推断时间窗并在 action/evidence 中写明依据。
 - SLS 默认 logstore 固定为 `all`；不得因配置或便利自行改为单服务 logstore，显式使用非 `all` 前必须用户确认。
 - SLS 查询如果在实体锚点之外追加关键词，关键词必须来自代码常量/日志模板或 SQL 表字段/表结构，并通过 `keyword_source` 声明；不得由 Agent 自己猜。
+- `action plan` 采用通用 playbook 或 `memory/knowledge.yaml` 知识时，优先用 `--playbook` / `--knowledge` 显式记录，让报告和审计能看到“为什么这么查”。
+- `next --json` 返回的 `health` 是过程仪表盘；若出现 `pending_actions`、`open_hypotheses`、`possible_half_root_cause` 等标记，Agent 应优先处理这些质量缺口。
+- 结论如果只解释“哪里断了”（连不上、不可达、超时、离线、校验失败），但没有变更/timeline/影响面/反证证据，会触发 `HALF_ROOT_CAUSE`；必须继续追最近变更或把根因降级为待验证。
 - 执行 `action plan/confirm/complete` 后必须阅读 CLI 输出里的 `display`：自然语言说明、命令原文、门禁评估和结构化结果都以 runtime 输出为准，不要在对话里自行编造门禁结论。
 - 门禁规则可以通过 `.env` 的 `COMPASS_SQL_GATE_MEDIUM_ROWS` / `COMPASS_SQL_GATE_HIGH_ROWS` / `COMPASS_SLS_GENERIC_KEYWORDS` / `COMPASS_SLS_KEYWORD_SOURCES` 调整；`COMPASS_NON_PROD_RELAX_GATES=1` 只允许放宽 test/uat 等非生产环境，不能关闭 prod SQL EXPLAIN、SLS anchor 或 keyword_source 要求。
 - 所有展示给用户的查询结果必须脱敏，规则见 `guards/data-masking.md`。

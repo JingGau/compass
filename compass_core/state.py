@@ -42,6 +42,7 @@ def default_state() -> dict[str, Any]:
         "applicable_knowledge": [],
         "changes": [],
         "pending_confirmations": [],
+        "events": [],
     }
 
 
@@ -103,6 +104,7 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("applicable_knowledge", [])
     migrated.setdefault("changes", [])
     migrated.setdefault("pending_confirmations", [])
+    migrated.setdefault("events", [])
     if int(migrated.get("schema_version", 1)) < 2:
         migrated["schema_version"] = 2
     return migrated
