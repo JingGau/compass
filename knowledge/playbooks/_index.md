@@ -7,6 +7,8 @@
 ## 使用边界
 
 - Agent 自动模式下，所有真实查询前必须先 `action plan`，查询后必须 `action complete`。
+- 每次制定 `action plan` 前都应把本目录作为策略参考上下文；新增 playbook 默认进入后续决策上下文。
+- 如果采用某条 playbook，应在 action objective/source/success-criteria 或后续 evidence finding 中体现。
 - Playbook 只能指导“下一步查什么”，不能绕过 scene fact、门禁、证据引用和 report。
 - 线上 SLS / Doris 查询仍必须遵守实体锚点、keyword_source、EXPLAIN、风险确认等门禁。
 - 如果 playbook 与当前证据冲突，以当前证据和 Runtime 门禁为准。

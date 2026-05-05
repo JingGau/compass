@@ -31,16 +31,17 @@ Do not use this skill for:
 3. 用户确认 `auto` 后，Agent 必须自动按 CLI Runtime 推进，不要每一步都询问是否继续；只有用户主动打断、runtime 硬门禁失败、prod 中高风险 SQL、外部/高风险数据源、缺少关键实体时才暂停请用户决策。`manual` 模式才逐步询问。
 4. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程；runtime 会拦截未确认、缺 scene fact、未 report 就策略沉淀等顺序错误。
    - Agent 自动调用 SLS/Doris adapter 时必须处于已规划 action 上下文：设置 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
-5. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence；没有 scene fact 时 `action plan` 会被拒绝。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
-6. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
-7. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
-8. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
+5. 每次制定 `action plan` 前，Agent 必须把 `knowledge/playbooks/` 作为策略参考上下文之一；若匹配到适用 playbook，应在 action objective/source/success-criteria 或后续 evidence finding 中体现采用了哪条 playbook。Playbook 只辅助选择侦查路径，不替代 Runtime 门禁。
+6. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence；没有 scene fact 时 `action plan` 会被拒绝。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
+7. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
+8. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
+9. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
    - **强烈建议**同时提供：`--tldr "<≤3 句执行摘要>"`、`--severity sev1|sev2|sev3|sev4`、以及四个时间戳 `--detected-at / --acknowledged-at / --mitigated-at / --resolved-at`；这些字段直接驱动报告头部的 TL;DR 卡片与 MTTD/MTTM/MTTR 时序表。
    - 结构化的根治项请优先用 `--remediation-item "desc=...;owner=@team-x;due=2026-05-15;url=https://...;status=planned"` 形式，无 Owner 的根治项会触发 `REMEDIATION_NO_OWNER` 警告。
-9. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
-10. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
-11. 报告后必须确认是否保留本次最终查询策略；auto 模式下若用户未打断，Agent 可根据复用价值直接 `strategy keep` 或 `strategy discard`，并写明理由。未生成 report 时，`strategy keep/discard` 会被拒绝。
-12. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
+10. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
+11. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
+12. 报告后必须确认是否保留本次最终查询策略；auto 模式下若用户未打断，Agent 可根据复用价值直接 `strategy keep` 或 `strategy discard`，并写明理由。未生成 report 时，`strategy keep/discard` 会被拒绝。
+13. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
 
 最小命令链：
 

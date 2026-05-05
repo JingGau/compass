@@ -9,6 +9,8 @@ Playbook 不替代 Runtime：
 - Runtime 负责流程状态、门禁、安全拦截。
 - Playbook 只帮助 Agent / 人类选择日志、代码、数据库、知识库等侦查路径。
 - 任何真实查询仍必须先 `action plan`，查询后 `action complete`。
+- 每次制定 `action plan` 前都应检查 playbook 是否适用；新增 playbook 默认进入后续决策上下文。
+- 如果采用了某条 playbook，应在 action objective/source/success-criteria 或后续 evidence finding 中留下可追踪说明。
 
 ## 推荐结构
 
