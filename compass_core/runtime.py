@@ -417,20 +417,38 @@ def confirm_action(
 
 
 def adapter_runtime_env(path: str | Path, *, action_id: str) -> tuple[dict[str, Any], dict[str, str]]:
-    state = _load_state(path)
-    _require_confirmed(state)
-    action = _find_action_plan(state, action_id)
-    if action.get("status") != "planned":
-        raise CompassRuntimeError(
-            f"action {action_id} 状态为 {action.get('status')}，不能生成 adapter 自动执行环境。"
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        action = _find_action_plan(state, action_id)
+        if action.get("status") != "planned":
+            raise CompassRuntimeError(
+                f"action {action_id} 状态为 {action.get('status')}，不能生成 adapter 自动执行环境。"
+            )
+        env = {
+            "COMPASS_ADAPTER_MODE": "agent_auto",
+            "COMPASS_AGENT_AUTO": "1",
+            "COMPASS_RUNTIME_STATE_FILE": str(Path(path).resolve()),
+            "COMPASS_RUNTIME_ACTION_ID": action_id,
+        }
+        _append_event(
+            state,
+            "adapter_env_generated",
+            summary=f"action {action_id} adapter env generated",
+            refs={
+                "action_id": action_id,
+                "track": str(action.get("track", "")),
+                "source": str(action.get("source", "")),
+            },
         )
-    env = {
-        "COMPASS_ADAPTER_MODE": "agent_auto",
-        "COMPASS_AGENT_AUTO": "1",
-        "COMPASS_RUNTIME_STATE_FILE": str(Path(path).resolve()),
-        "COMPASS_RUNTIME_ACTION_ID": action_id,
-    }
-    return action, env
+        _touch(state)
+        output["action"] = action
+        output["env"] = env
+        return state
+
+    _update_runtime_state(path, mutate)
+    return output["action"], output["env"]
 
 
 def complete_action(

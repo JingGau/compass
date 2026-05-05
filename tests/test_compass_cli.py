@@ -1450,6 +1450,12 @@ def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
     assert "COMPASS_RUNTIME_ACTION_ID=A1" in payload["display"]["command_raw"]
     assert payload["display"]["after"].startswith("结果：")
 
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    event = state["events"][-1]
+    assert event["type"] == "adapter_env_generated"
+    assert event["refs"]["action_id"] == "A1"
+    assert event["refs"]["track"] == "sls"
+
 
 def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
