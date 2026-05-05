@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fnmatch
 import json
 import os
 from pathlib import Path
@@ -74,6 +75,19 @@ GENERIC_SLS_KEYWORDS = {
     "回调",
 }
 SLS_EXTRA_KEYWORD_SOURCES = {"code", "sql", "schema", "table_field", "code_sql", "none"}
+CODE_SEARCH_SKIP_DIRS = {
+    ".git",
+    ".idea",
+    ".pytest_cache",
+    ".venv",
+    "__pycache__",
+    "build",
+    "dist",
+    "node_modules",
+    "target",
+}
+CODE_SEARCH_MAX_FILE_BYTES = 1_000_000
+CODE_SHOW_MAX_LINES = 200
 
 
 def start_session(path: str | Path, text: str) -> dict[str, Any]:
@@ -449,6 +463,103 @@ def adapter_runtime_env(path: str | Path, *, action_id: str) -> tuple[dict[str, 
 
     _update_runtime_state(path, mutate)
     return output["action"], output["env"]
+
+
+def code_search(
+    path: str | Path,
+    *,
+    action_id: str,
+    query: str,
+    root: str | Path | None = None,
+    glob: str | None = None,
+    limit: int = 20,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _, repo_path = _require_planned_code_action(state, action_id)
+        search_root = _resolve_code_path(repo_path, root or repo_path)
+        if not search_root.exists() or not search_root.is_dir():
+            raise CompassRuntimeError(f"code search root 不存在或不是目录：{search_root}。")
+        matches, truncated = _search_code_files(search_root, repo_path, query=query, glob=glob, limit=limit)
+        result = {
+            "action_id": action_id,
+            "repo": str(repo_path),
+            "root": str(search_root),
+            "query": query,
+            "glob": glob or "",
+            "limit": max(1, int(limit)),
+            "truncated": truncated,
+            "matches": matches,
+        }
+        _append_event(
+            state,
+            "code_search_executed",
+            summary=f"action {action_id} code search: {query}",
+            refs={
+                "action_id": action_id,
+                "repo": str(repo_path),
+                "root": str(search_root),
+                "query": query,
+                "matches": len(matches),
+                "truncated": truncated,
+            },
+        )
+        _touch(state)
+        output["result"] = result
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["result"]
+
+
+def code_show(
+    path: str | Path,
+    *,
+    action_id: str,
+    file_path: str | Path,
+    start: int = 1,
+    end: int = 120,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    output: dict[str, Any] = {}
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _, repo_path = _require_planned_code_action(state, action_id)
+        target = _resolve_code_path(repo_path, file_path)
+        if not target.exists() or not target.is_file():
+            raise CompassRuntimeError(f"code show 文件不存在或不是普通文件：{target}。")
+        start_line = max(1, int(start))
+        end_line = max(start_line, int(end))
+        end_line = min(end_line, start_line + CODE_SHOW_MAX_LINES - 1)
+        lines = _read_code_lines(target, start=start_line, end=end_line)
+        result = {
+            "action_id": action_id,
+            "repo": str(repo_path),
+            "path": target.relative_to(repo_path).as_posix(),
+            "start": start_line,
+            "end": start_line + len(lines) - 1 if lines else start_line,
+            "lines": lines,
+        }
+        _append_event(
+            state,
+            "code_show_executed",
+            summary=f"action {action_id} code show: {result['path']}",
+            refs={
+                "action_id": action_id,
+                "repo": str(repo_path),
+                "path": result["path"],
+                "start": result["start"],
+                "end": result["end"],
+            },
+        )
+        _touch(state)
+        output["result"] = result
+        return state
+
+    state = _update_runtime_state(path, mutate)
+    return state, output["result"]
 
 
 def complete_action(
@@ -1893,6 +2004,105 @@ def _find_action_plan(state: dict[str, Any], action_id: str) -> dict[str, Any]:
     raise CompassRuntimeError(f"action plan 不存在：{action_id}。")
 
 
+def _require_planned_code_action(state: dict[str, Any], action_id: str) -> tuple[dict[str, Any], Path]:
+    action = _find_action_plan(state, action_id)
+    if str(action.get("track", "")).lower() != "code":
+        raise CompassRuntimeError(f"action {action_id} track 不是 code，禁止通过 code gateway 读取代码。")
+    if action.get("status") != "planned":
+        raise CompassRuntimeError(f"action {action_id} 状态为 {action.get('status')}，不能读取代码。")
+    gate = action.get("gate") or {}
+    if str(gate.get("type", "")).lower() != "code":
+        raise CompassRuntimeError(f"action {action_id} gate.type 不是 code，不能读取代码。")
+    scope = str(gate.get("scope", "")).lower()
+    if scope not in {"read-only", "readonly", "repo-read-only"}:
+        raise CompassRuntimeError(f"action {action_id} gate.scope 不是 read-only，禁止通过 code gateway 读取代码。")
+    repo = str((action.get("input") or {}).get("repo") or "").strip()
+    if not repo:
+        raise CompassRuntimeError(f"action {action_id} 缺少 input.repo，不能读取代码。")
+    repo_path = Path(repo).expanduser().resolve()
+    if not repo_path.exists() or not repo_path.is_dir():
+        raise CompassRuntimeError(f"action {action_id} repo 不存在或不是目录：{repo_path}。")
+    return action, repo_path
+
+
+def _resolve_code_path(repo_path: Path, requested: str | Path) -> Path:
+    raw = Path(requested).expanduser()
+    target = raw.resolve() if raw.is_absolute() else (repo_path / raw).resolve()
+    try:
+        target.relative_to(repo_path)
+    except ValueError as exc:
+        raise CompassRuntimeError(f"路径不在 action repo 范围内：{target}。") from exc
+    return target
+
+
+def _search_code_files(
+    search_root: Path,
+    repo_path: Path,
+    *,
+    query: str,
+    glob: str | None,
+    limit: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    keyword = str(query)
+    if not keyword:
+        raise CompassRuntimeError("code search query 不能为空。")
+    max_matches = max(1, int(limit))
+    matches: list[dict[str, Any]] = []
+    truncated = False
+    for file_path in _iter_code_files(search_root, repo_path, glob=glob):
+        try:
+            text = file_path.read_text(encoding="utf-8", errors="replace")
+            for line_number, line in enumerate(text.splitlines(), 1):
+                if keyword not in line:
+                    continue
+                matches.append(
+                    {
+                        "path": file_path.relative_to(repo_path).as_posix(),
+                        "line": line_number,
+                        "text": line[:500],
+                    }
+                )
+                if len(matches) >= max_matches:
+                    truncated = True
+                    return matches, truncated
+        except OSError:
+            continue
+    return matches, truncated
+
+
+def _iter_code_files(search_root: Path, repo_path: Path, *, glob: str | None) -> list[Path]:
+    files: list[Path] = []
+    for current, dirs, names in os.walk(search_root):
+        dirs[:] = sorted(dirname for dirname in dirs if dirname not in CODE_SEARCH_SKIP_DIRS)
+        current_path = Path(current)
+        if any(part in CODE_SEARCH_SKIP_DIRS for part in current_path.relative_to(repo_path).parts):
+            dirs[:] = []
+            continue
+        for name in sorted(names):
+            path = current_path / name
+            if not path.is_file():
+                continue
+            if glob:
+                relative = path.relative_to(repo_path).as_posix()
+                if not (fnmatch.fnmatch(relative, glob) or fnmatch.fnmatch(path.name, glob)):
+                    continue
+            try:
+                if path.stat().st_size > CODE_SEARCH_MAX_FILE_BYTES:
+                    continue
+            except OSError:
+                continue
+            files.append(path)
+    return files
+
+
+def _read_code_lines(path: Path, *, start: int, end: int) -> list[dict[str, Any]]:
+    lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    return [
+        {"line": line_number, "text": lines[line_number - 1]}
+        for line_number in range(start, min(end, len(lines)) + 1)
+    ]
+
+
 def _pending_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in state.get("action_plan", []) if item.get("status") == "planned"]
 
@@ -1913,6 +2123,9 @@ def _build_next_task(state: dict[str, Any]) -> dict[str, Any]:
         suggested = []
         if track in {"sls", "sql"}:
             suggested.append(f"compass action env --action-id {action_id}")
+        if track == "code":
+            suggested.append(f"compass code search --action-id {action_id} --query <关键字>")
+            suggested.append(f"compass code show --action-id {action_id} --path <相对路径> --start <起始行> --end <结束行>")
         suggested.append(f"compass action complete --action-id {action_id} --summary <结果摘要>")
         return _task_card(
             task_type="action_complete",

@@ -263,6 +263,8 @@ Hermes/minimax 等自动 runner 建议通过 `scripts/compass-agent-auto.sh <age
 
 Agent 自动模式裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。`action env` 会写入 `adapter_env_generated` 事件，方便审计。人工直接使用 adapter 不设置这些变量，不受该限制。
 
+Agent 自动读取业务代码也必须走受控入口：先规划 `track=code` action，再使用 `compass code search/show --action-id <id>`。gateway 会校验 `track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 审计事件；裸 `rg/sed/cat` 只适合人类临时调试，不算自动排查证据链。
+
 关键命令：
 
 ```bash
@@ -293,6 +295,21 @@ python3 -m compass_cli action complete \
   --supports H2 \
   --json
 
+python3 -m compass_cli action plan \
+  --action-id C1 \
+  --track code \
+  --source repo \
+  --objective "定位礼品卡展示分支" \
+  --success-criteria "找到接口/服务/字段映射和可引用代码证据" \
+  --input "repo=/Users/me/workspace/projects/order_server" \
+  --input "target=payment-ways-v2" \
+  --gate "type=code" \
+  --gate "scope=read-only" \
+  --json
+
+python3 -m compass_cli code search --action-id C1 --query "payment-ways-v2" --json
+python3 -m compass_cli code show --action-id C1 --path "src/main/java/.../PaymentService.java" --start 40 --end 90 --json
+
 python3 -m compass_cli report --audience technical
 python3 -m compass_cli report --audience business
 python3 -m compass_cli report --audience review
@@ -310,6 +327,7 @@ python3 -m compass_cli report --audience review
 - SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认，不能因为环境配置或便利自行改掉。
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
+- 自动 Agent 读取代码必须使用 `compass code search/show`；CLI 会校验 planned `track=code` action 和 repo 边界，失败时应修正 action 或补确认，不能绕过。
 - `action plan/env/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
 - `action plan` 会强制注入 `context`：playbook 索引、候选知识、首轮候选方向和已召回 playbook；`--playbook` / `--knowledge` 用来声明本步实际采用了哪些通用上下文，未声明会留下软质量标记。
 - 结论若只定位到连接失败、不可达、超时、离线、校验失败等直接断点，却没有登记变更或变更证据，会触发 `HALF_ROOT_CAUSE` 质量提示；这是软告警，不阻塞，但建议继续追最近变更、时间线、影响面和反证。

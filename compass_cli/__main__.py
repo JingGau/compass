@@ -25,6 +25,8 @@ from compass_core.runtime import (
     add_hypothesis,
     add_scene_fact,
     adapter_runtime_env,
+    code_search,
+    code_show,
     complete_action,
     conclude_session,
     confirm_action,
@@ -146,6 +148,27 @@ def build_parser() -> argparse.ArgumentParser:
     )
     action_complete.add_argument("--json", action="store_true", dest="json_output")
     action_complete.set_defaults(handler=handle_action_complete)
+
+    code = subparsers.add_parser("code", help="read code through a planned Compass code action")
+    code_sub = code.add_subparsers(dest="code_command", required=True)
+    code_search_cmd = code_sub.add_parser("search", help="search code inside the action repo")
+    code_search_cmd.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    code_search_cmd.add_argument("--action-id", required=True)
+    code_search_cmd.add_argument("--query", required=True)
+    code_search_cmd.add_argument("--root")
+    code_search_cmd.add_argument("--glob")
+    code_search_cmd.add_argument("--limit", type=int, default=20)
+    code_search_cmd.add_argument("--json", action="store_true", dest="json_output")
+    code_search_cmd.set_defaults(handler=handle_code_search)
+
+    code_show_cmd = code_sub.add_parser("show", help="show a bounded line window inside the action repo")
+    code_show_cmd.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    code_show_cmd.add_argument("--action-id", required=True)
+    code_show_cmd.add_argument("--path", required=True, dest="file_path")
+    code_show_cmd.add_argument("--start", type=int, default=1)
+    code_show_cmd.add_argument("--end", type=int, default=120)
+    code_show_cmd.add_argument("--json", action="store_true", dest="json_output")
+    code_show_cmd.set_defaults(handler=handle_code_show)
 
     evidence = subparsers.add_parser("evidence", help="manage evidence")
     evidence_sub = evidence.add_subparsers(dest="evidence_command", required=True)
@@ -657,6 +680,51 @@ def handle_action_complete(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_code_search(args: argparse.Namespace) -> int:
+    try:
+        state, result = code_search(
+            args.state_file,
+            action_id=args.action_id,
+            query=args.query,
+            root=args.root,
+            glob=args.glob,
+            limit=args.limit,
+        )
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    display = build_code_search_display(result)
+    payload = {"ok": True, "result": result, "display": display, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print_action_display(display)
+        for match in result.get("matches") or []:
+            print(f"{match['path']}:{match['line']}: {match['text']}")
+    return 0
+
+
+def handle_code_show(args: argparse.Namespace) -> int:
+    try:
+        state, result = code_show(
+            args.state_file,
+            action_id=args.action_id,
+            file_path=args.file_path,
+            start=args.start,
+            end=args.end,
+        )
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    display = build_code_show_display(result)
+    payload = {"ok": True, "result": result, "display": display, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print_action_display(display)
+        for line in result.get("lines") or []:
+            print(f"{line['line']}: {line['text']}")
+    return 0
+
+
 def build_action_plan_display(action: dict[str, Any]) -> dict[str, Any]:
     gate = action.get("gate") or {}
     return {
@@ -711,6 +779,28 @@ def build_action_complete_display(action_id: str, evidence: dict[str, Any]) -> d
     }
 
 
+def build_code_search_display(result: dict[str, Any]) -> dict[str, Any]:
+    count = len(result.get("matches") or [])
+    truncated = "，结果已截断" if result.get("truncated") else ""
+    return {
+        "before": f"准备执行：在受控 code action {result.get('action_id')} 中搜索代码。",
+        "command_raw": _code_search_command(result),
+        "gate": "门禁评估：通过（track=code; status=planned; scope=repo-read-only）。",
+        "after": f"执行结论：命中 {count} 处{truncated}。",
+        "result_raw": result,
+    }
+
+
+def build_code_show_display(result: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "before": f"准备执行：在受控 code action {result.get('action_id')} 中读取代码片段。",
+        "command_raw": _code_show_command(result),
+        "gate": "门禁评估：通过（track=code; status=planned; scope=repo-read-only）。",
+        "after": f"执行结论：读取 {result.get('path')} 第 {result.get('start')}-{result.get('end')} 行。",
+        "result_raw": result,
+    }
+
+
 def print_action_display(display: dict[str, Any]) -> None:
     print(display["before"])
     print("命令原文：")
@@ -758,6 +848,43 @@ def _env_command(env: dict[str, str]) -> str:
     ]
     parts = [f"{key}={shlex.quote(str(env[key]))}" for key in order if key in env]
     return " ".join(parts)
+
+
+def _code_search_command(result: dict[str, Any]) -> str:
+    parts = [
+        "compass",
+        "code",
+        "search",
+        "--action-id",
+        str(result.get("action_id", "")),
+        "--query",
+        str(result.get("query", "")),
+        "--limit",
+        str(result.get("limit", "")),
+    ]
+    if result.get("root"):
+        parts.extend(["--root", str(result.get("root", ""))])
+    if result.get("glob"):
+        parts.extend(["--glob", str(result.get("glob", ""))])
+    return _command(parts)
+
+
+def _code_show_command(result: dict[str, Any]) -> str:
+    return _command(
+        [
+            "compass",
+            "code",
+            "show",
+            "--action-id",
+            str(result.get("action_id", "")),
+            "--path",
+            str(result.get("path", "")),
+            "--start",
+            str(result.get("start", "")),
+            "--end",
+            str(result.get("end", "")),
+        ]
+    )
 
 
 def _gate_summary(gate: dict[str, Any]) -> str:

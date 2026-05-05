@@ -2276,6 +2276,296 @@ def test_manual_action_plan_allows_empty_input_and_gate(tmp_path: Path) -> None:
     assert payload["action"]["gate"] == {}
 
 
+def test_code_search_requires_planned_code_action_and_records_event(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    repo = tmp_path / "repo"
+    source_file = repo / "src" / "service.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text(
+        "def validate_company(name, code):\n"
+        "    return 'ORG_CODE_NOT_MATCH' if name and code else 'OK'\n",
+        encoding="utf-8",
+    )
+    run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(
+        state_file,
+        category="entrypoint",
+        name="vehicle-company-form",
+        value="企业名称与统一社会信用代码不匹配",
+        source="用户截图",
+    )
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--track",
+        "code",
+        "--source",
+        "repo",
+        "--objective",
+        "定位企业名称与信用代码校验逻辑",
+        "--success-criteria",
+        "找到返回不匹配提示的代码路径",
+        "--input",
+        f"repo={repo}",
+        "--input",
+        "target=org-code-validation",
+        "--gate",
+        "type=code",
+        "--gate",
+        "scope=read-only",
+        "--json",
+    )
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    next_step = run_cli("next", "--state-file", str(state_file), "--json")
+    task = json.loads(next_step.stdout)["next"]["task"]
+    assert task["suggested_commands"][:2] == [
+        "compass code search --action-id C1 --query <关键字>",
+        "compass code show --action-id C1 --path <相对路径> --start <起始行> --end <结束行>",
+    ]
+
+    search = run_cli(
+        "code",
+        "search",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--query",
+        "ORG_CODE_NOT_MATCH",
+        "--json",
+    )
+
+    assert search.returncode == 0, search.stdout + search.stderr
+    payload = json.loads(search.stdout)
+    assert payload["result"]["matches"] == [
+        {"path": "src/service.py", "line": 2, "text": "    return 'ORG_CODE_NOT_MATCH' if name and code else 'OK'"}
+    ]
+    assert payload["display"]["before"].startswith("准备执行：在受控 code action C1 中搜索代码")
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    event = state["events"][-1]
+    assert event["type"] == "code_search_executed"
+    assert event["refs"]["action_id"] == "C1"
+    assert event["refs"]["matches"] == 1
+
+
+def test_code_search_rejects_non_code_action(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "M1",
+        "--track",
+        "manual",
+        "--source",
+        "用户补充",
+        "--objective",
+        "人工确认入口",
+        "--success-criteria",
+        "用户确认入口",
+        "--json",
+    )
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    search = run_cli(
+        "code",
+        "search",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "M1",
+        "--query",
+        "ORG_CODE_NOT_MATCH",
+        "--root",
+        str(repo),
+        "--json",
+    )
+
+    assert search.returncode == 1
+    assert "track 不是 code" in json.loads(search.stdout)["error"]
+
+
+def test_code_search_rejects_non_read_only_scope(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    repo = tmp_path / "repo"
+    source_file = repo / "src" / "service.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("ORG_CODE_NOT_MATCH = True\n", encoding="utf-8")
+    run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--track",
+        "code",
+        "--source",
+        "repo",
+        "--objective",
+        "定位企业名称与信用代码校验逻辑",
+        "--success-criteria",
+        "找到返回不匹配提示的代码路径",
+        "--input",
+        f"repo={repo}",
+        "--input",
+        "target=org-code-validation",
+        "--gate",
+        "type=code",
+        "--gate",
+        "scope=write",
+        "--json",
+    )
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    search = run_cli(
+        "code",
+        "search",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--query",
+        "ORG_CODE_NOT_MATCH",
+        "--json",
+    )
+
+    assert search.returncode == 1
+    assert "scope 不是 read-only" in json.loads(search.stdout)["error"]
+
+
+def test_code_show_requires_path_inside_action_repo(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    repo = tmp_path / "repo"
+    outside = tmp_path / "outside.py"
+    (repo / "src").mkdir(parents=True)
+    outside.write_text("SECRET = True\n", encoding="utf-8")
+    run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--track",
+        "code",
+        "--source",
+        "repo",
+        "--objective",
+        "定位企业名称与信用代码校验逻辑",
+        "--success-criteria",
+        "找到返回不匹配提示的代码路径",
+        "--input",
+        f"repo={repo}",
+        "--input",
+        "target=org-code-validation",
+        "--gate",
+        "type=code",
+        "--gate",
+        "scope=read-only",
+        "--json",
+    )
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    show = run_cli(
+        "code",
+        "show",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--path",
+        str(outside),
+        "--json",
+    )
+
+    assert show.returncode == 1
+    assert "不在 action repo 范围内" in json.loads(show.stdout)["error"]
+
+
+def test_code_show_returns_line_window_and_records_event(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    repo = tmp_path / "repo"
+    source_file = repo / "src" / "service.py"
+    source_file.parent.mkdir(parents=True)
+    source_file.write_text("line1\nline2\nline3\n", encoding="utf-8")
+    run_cli("start", "企业名称与统一社会信用代码不匹配", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--track",
+        "code",
+        "--source",
+        "repo",
+        "--objective",
+        "定位企业名称与信用代码校验逻辑",
+        "--success-criteria",
+        "找到返回不匹配提示的代码路径",
+        "--input",
+        f"repo={repo}",
+        "--input",
+        "target=org-code-validation",
+        "--gate",
+        "type=code",
+        "--gate",
+        "scope=read-only",
+        "--json",
+    )
+    assert planned.returncode == 0, planned.stdout + planned.stderr
+
+    show = run_cli(
+        "code",
+        "show",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "C1",
+        "--path",
+        "src/service.py",
+        "--start",
+        "2",
+        "--end",
+        "3",
+        "--json",
+    )
+
+    assert show.returncode == 0, show.stdout + show.stderr
+    payload = json.loads(show.stdout)
+    assert payload["result"]["lines"] == [
+        {"line": 2, "text": "line2"},
+        {"line": 3, "text": "line3"},
+    ]
+    assert payload["display"]["after"] == "执行结论：读取 src/service.py 第 2-3 行。"
+    state = json.loads(state_file.read_text(encoding="utf-8"))
+    assert state["events"][-1]["type"] == "code_show_executed"
+
+
 def test_report_masks_sensitive_display_values(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
