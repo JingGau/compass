@@ -24,6 +24,7 @@ from compass_core.runtime import (
     CompassRuntimeError,
     add_hypothesis,
     add_scene_fact,
+    adapter_runtime_env,
     complete_action,
     conclude_session,
     confirm_action,
@@ -116,6 +117,15 @@ def build_parser() -> argparse.ArgumentParser:
     action_confirm.add_argument("--note", default="")
     action_confirm.add_argument("--json", action="store_true", dest="json_output")
     action_confirm.set_defaults(handler=handle_action_confirm)
+
+    action_env = action_sub.add_parser(
+        "env",
+        help="print runtime environment variables for an agent-auto adapter call",
+    )
+    action_env.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    action_env.add_argument("--action-id", required=True)
+    action_env.add_argument("--json", action="store_true", dest="json_output")
+    action_env.set_defaults(handler=handle_action_env)
 
     action_complete = action_sub.add_parser("complete", help="complete a planned action and create evidence")
     action_complete.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
@@ -607,6 +617,20 @@ def handle_action_confirm(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_action_env(args: argparse.Namespace) -> int:
+    try:
+        action, env = adapter_runtime_env(args.state_file, action_id=args.action_id)
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    display = build_action_env_display(action, env)
+    payload = {"ok": True, "action": action, "env": env, "display": display}
+    if args.json_output:
+        print_json(payload)
+    else:
+        print_action_display(display)
+    return 0
+
+
 def handle_action_complete(args: argparse.Namespace) -> int:
     try:
         state, evidence = complete_action(
@@ -661,6 +685,22 @@ def build_action_confirm_display(action: dict[str, Any], note: str) -> dict[str,
     }
 
 
+def build_action_env_display(action: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+    return {
+        "before": (
+            f"准备执行：为 action {action.get('action_id')} 生成 agent 自动 adapter 环境。"
+            "真实查询必须带着这些变量进入 adapter。"
+        ),
+        "command_raw": _env_command(env),
+        "gate": _gate_summary(action.get("gate") or {}),
+        "after": (
+            f"结果：action {action.get('action_id')} 的 runtime 上下文已生成；"
+            "执行 adapter 后请用 action complete 写入证据。"
+        ),
+        "result_raw": env,
+    }
+
+
 def build_action_complete_display(action_id: str, evidence: dict[str, Any]) -> dict[str, Any]:
     return {
         "before": f"准备记录：action {action_id} 的执行结果将写成 evidence。",
@@ -707,6 +747,17 @@ def _action_plan_command(action: dict[str, Any]) -> str:
     for value in action.get("applied_knowledge") or []:
         parts.extend(["--knowledge", str(value)])
     return _command(parts)
+
+
+def _env_command(env: dict[str, str]) -> str:
+    order = [
+        "COMPASS_ADAPTER_MODE",
+        "COMPASS_AGENT_AUTO",
+        "COMPASS_RUNTIME_STATE_FILE",
+        "COMPASS_RUNTIME_ACTION_ID",
+    ]
+    parts = [f"{key}={shlex.quote(str(env[key]))}" for key in order if key in env]
+    return " ".join(parts)
 
 
 def _gate_summary(gate: dict[str, Any]) -> str:

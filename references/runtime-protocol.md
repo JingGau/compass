@@ -31,9 +31,10 @@ new
 - `start` / `confirm` / `next`：进入排查、确认执行模式、获取下一步建议。`start` 会自动从 `memory/knowledge.yaml` 召回 top-5 相关知识写入 `state.applicable_knowledge`，并把它们加入 hits 计数。
 - `next --json`：除下一步建议外，还返回轻量 `health` 摘要和结构化 `task` 任务卡。`health` 包含 scene/evidence/change/pending action/open hypothesis/events 计数，以及 `pending_actions`、`no_changes_recorded`、`open_hypotheses`、`possible_half_root_cause` 等质量标记；`task` 由 `knowledge/playbooks/rules.yaml` 与当前 state 匹配生成，给高速 Agent 一个可执行的下一步。`open_hypotheses` 只统计证据后正式创建的 hypothesis，不统计首轮候选排查方向。
 - `confirm --mode auto`：首轮人工确认后由 Agent 自动推进后续流程；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。`confirm --mode manual` 才要求每一步查询前等待用户确认。
-- Agent 自动模式直接调用 SLS/Doris adapter 时，必须带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置 `COMPASS_AGENT_AUTO`，不受该保护影响。
+- Agent 自动模式直接调用 SLS/Doris adapter 时，必须先 `action plan`，再运行 `action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置这些变量，不受该保护影响。
 - `scene fact`：在记录假设或写结论前，先用 `category=entrypoint/object/upstream/downstream/config/variant/diff/baseline/repro` 把可引用事实落盘；`category=diff` 强制 value 含对比词（差异/对比/vs/相比/之前/之后/正常/异常/变更等）；建议带 `--event-at` 让事实进入 timeline。
 - `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，并自动注入 `context`（playbook 索引、候选知识、首轮候选方向、已召回 playbook）。`--playbook` / `--knowledge` 表示本步实际采用了哪些上下文；未声明时写入软质量标记，不阻塞。`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
+- `action env`：只为 status=`planned` 的 action 生成自动 adapter 环境。SLS/SQL 的 `next --json.task.suggested_commands` 会优先提示此命令，防止 Agent 手写或漏写 runtime 变量。
 - `action confirm`：仅当 `plan` 因 SQL 风险等门禁被锁为 `requires_confirmation` 时使用，由用户明确确认风险后解锁。
 - `change record` / `change list`：登记发布、配置、数据迁移、灰度、权限调整等变更，必填 `--type/--target/--description/--event-at`，进入 timeline 与故障窗口对齐。
 - `timeline`：把所有带 `event_at` 的 changes / scene_facts / evidence 与 action_history 合并为按时间排序的故障时间线。
@@ -115,7 +116,7 @@ reopen 会把当前 conclusion 写入 `conclusion_history`，标记 `status=supe
 - `plan_action(track='sls')`：未提供 `time_range` 时 runtime 自动补 `-7d`；如能从订单创建、支付创建、事件发生时间推断时间窗，应显式传入该时间窗并记录依据。
 - `plan_action(track='sls')`：必须有高区分度实体作为 `anchor`（订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等）；额外关键词必须声明 `keyword_source=code/sql/schema/table_field/code_sql`，禁止 Agent 自己猜业务词。
 - SLS 默认 logstore 固定为 `all`；显式使用非 `all` logstore 必须先用户确认。
-- `action plan/confirm/complete`：CLI 输出必须先给自然语言说明，再给命令原文、门禁评估和结构化结果；JSON 输出使用同一份 `display` 字段。
+- `action plan/env/confirm/complete`：CLI 输出必须先给自然语言说明，再给命令原文、门禁评估和结构化结果；JSON 输出使用同一份 `display` 字段。
 - 门禁规则可通过环境变量调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。`COMPASS_NON_PROD_RELAX_GATES=1` 只放宽非生产环境；prod 强制门禁不可关闭。
 - `conclude` 必须满足 8 个结构化字段（`what/where/when/why_technical/why_business/blast_radius/how/inference_chain`），且引用真实存在的 evidence id。
 - 默认环境为 `prod`；SQL plan 未显式提供 `env` 时 runtime 使用 session 环境，默认就是 `prod`。

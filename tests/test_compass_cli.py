@@ -1400,6 +1400,57 @@ def test_action_plan_json_includes_display_contract(tmp_path: Path) -> None:
     assert display["after"].startswith("结果：")
 
 
+def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "sls",
+        "--source",
+        "SLS",
+        "--objective",
+        "确认财务是否返回礼品卡",
+        "--success-criteria",
+        "拿到 payment-ways-v2 trace 中财务返回和最终响应差异",
+        "--input",
+        "query=15921195068 AND payment-ways-v2",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--input",
+        "anchor=15921195068",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=code",
+    )
+    assert planned.returncode == 0, planned.stderr
+
+    result = run_cli("action", "env", "--state-file", str(state_file), "--action-id", "A1", "--json")
+
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    env = payload["env"]
+    assert env["COMPASS_ADAPTER_MODE"] == "agent_auto"
+    assert env["COMPASS_AGENT_AUTO"] == "1"
+    assert env["COMPASS_RUNTIME_STATE_FILE"] == str(state_file.resolve())
+    assert env["COMPASS_RUNTIME_ACTION_ID"] == "A1"
+    assert payload["display"]["before"].startswith("准备执行：")
+    assert "COMPASS_ADAPTER_MODE=agent_auto" in payload["display"]["command_raw"]
+    assert "COMPASS_RUNTIME_ACTION_ID=A1" in payload["display"]["command_raw"]
+    assert payload["display"]["after"].startswith("结果：")
+
+
 def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
@@ -1541,13 +1592,25 @@ def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
         "--action-id",
         "A1",
         "--track",
-        "manual",
+        "sls",
         "--source",
-        "用户补充",
+        "SLS",
         "--objective",
-        "确认用户端操作路径",
+        "确认用户端操作路径日志",
         "--success-criteria",
-        "用户确认 App 切换支付方式后礼品卡消失",
+        "拿到 payment-ways-v2 调用日志",
+        "--input",
+        "query=15921195068 AND payment-ways-v2",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--input",
+        "anchor=15921195068",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=code",
     )
     assert planned.returncode == 0, planned.stderr
 
@@ -1558,6 +1621,8 @@ def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
     assert health["pending_actions"] == 1
     assert health["scene_facts"] == 1
     assert "pending_actions" in health["quality_flags"]
+    task = json.loads(result.stdout)["next"]["task"]
+    assert any("action env --action-id A1" in command for command in task["suggested_commands"])
 
 
 def test_next_task_card_recommends_log_plan_for_screenshot_keyword(tmp_path: Path) -> None:

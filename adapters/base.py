@@ -131,47 +131,80 @@ DISABLED_RESP = {
     "error": "adapter 已禁用（config.yaml enabled=false）",
 }
 
+_TRUTHY = {"1", "true", "yes", "on"}
+_AGENT_ADAPTER_MODES = {"agent_auto", "agent-auto", "auto", "agent", "runtime"}
+_MANUAL_ADAPTER_MODES = {"manual", "human", "user"}
+
 
 def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: str | None = None) -> dict | None:
     """阻止 agent 自动模式绕过 Compass Runtime 直接查询 adapter。
 
-    人工直接使用 adapter 时不会设置 COMPASS_AGENT_AUTO，因此不受影响。
-    Agent 自动排查必须先通过 action plan 生成 action，再设置
-    COMPASS_RUNTIME_STATE_FILE / COMPASS_RUNTIME_ACTION_ID 进入 adapter。
+    人工直接使用 adapter 时不会设置 agent 自动模式变量，因此不受影响。
+    Agent 自动排查必须先通过 action plan 生成 action，再设置 runtime action 上下文进入 adapter。
     """
 
-    if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() not in {"1", "true", "yes", "on"}:
+    mode = _adapter_runtime_mode()
+    if mode == "manual":
         return None
+    if mode == "invalid":
+        return _runtime_guard_block(adapter, operation, "COMPASS_ADAPTER_MODE 无效", adapter_mode=mode)
 
     state_file = os.environ.get("COMPASS_RUNTIME_STATE_FILE", "").strip()
     action_id = os.environ.get("COMPASS_RUNTIME_ACTION_ID", "").strip()
     if not state_file or not action_id:
-        return _runtime_guard_block(adapter, operation, "缺少 COMPASS_RUNTIME_STATE_FILE 或 COMPASS_RUNTIME_ACTION_ID")
+        return _runtime_guard_block(
+            adapter,
+            operation,
+            "缺少 COMPASS_RUNTIME_STATE_FILE 或 COMPASS_RUNTIME_ACTION_ID",
+            adapter_mode=mode,
+        )
 
     try:
         state = json.loads(Path(state_file).read_text(encoding="utf-8"))
     except Exception as exc:
-        return _runtime_guard_block(adapter, operation, f"无法读取 runtime state：{exc}")
+        return _runtime_guard_block(adapter, operation, f"无法读取 runtime state：{exc}", adapter_mode=mode)
 
     if not state.get("flow", {}).get("confirmed"):
-        return _runtime_guard_block(adapter, operation, "会话尚未 confirm")
+        return _runtime_guard_block(adapter, operation, "会话尚未 confirm", adapter_mode=mode)
 
     action = next((item for item in state.get("action_plan") or [] if str(item.get("action_id")) == action_id), None)
     if not action:
-        return _runtime_guard_block(adapter, operation, f"找不到已规划 action：{action_id}")
+        return _runtime_guard_block(adapter, operation, f"找不到已规划 action：{action_id}", adapter_mode=mode)
     if action.get("status") != "planned":
-        return _runtime_guard_block(adapter, operation, f"action {action_id} 状态为 {action.get('status')}，不能执行 adapter")
+        return _runtime_guard_block(
+            adapter,
+            operation,
+            f"action {action_id} 状态为 {action.get('status')}，不能执行 adapter",
+            adapter_mode=mode,
+        )
     if expected_track and str(action.get("track", "")).lower() != expected_track.lower():
-        return _runtime_guard_block(adapter, operation, f"action {action_id} track 不是 {expected_track}")
+        return _runtime_guard_block(
+            adapter,
+            operation,
+            f"action {action_id} track 不是 {expected_track}",
+            adapter_mode=mode,
+        )
     return None
 
 
-def _runtime_guard_block(adapter: str, operation: str, reason: str) -> dict:
+def _adapter_runtime_mode() -> str:
+    if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() in _TRUTHY:
+        return "agent_auto"
+    explicit = os.environ.get("COMPASS_ADAPTER_MODE", "").strip().lower()
+    if explicit in _AGENT_ADAPTER_MODES:
+        return "agent_auto"
+    if explicit in _MANUAL_ADAPTER_MODES or not explicit:
+        return "manual"
+    return "invalid"
+
+
+def _runtime_guard_block(adapter: str, operation: str, reason: str, *, adapter_mode: str = "agent_auto") -> dict:
     return {
         "success": False,
         "data": None,
         "error": f"禁止 agent 自动模式裸调 adapter：{adapter}.{operation}。请先通过 compass action plan 并携带 runtime action 上下文。原因：{reason}",
         "requires_runtime_action": True,
+        "adapter_mode": adapter_mode,
         "adapter": adapter,
         "operation": operation,
     }

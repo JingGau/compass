@@ -259,7 +259,7 @@ Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事
 
 `auto` 模式只需要首轮人工确认。之后 Agent 应自动选择日志/代码/数据库等侦查路径并推进 CLI 流程，不逐步询问是否继续；程序只负责流程门禁和安全拦截。`manual` 模式才每一步等用户确认。
 
-Agent 自动模式裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再携带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID` 执行真实查询。人工直接使用 adapter 不设置这些变量，不受该限制。
+Agent 自动模式裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。人工直接使用 adapter 不设置这些变量，不受该限制。
 
 关键命令：
 
@@ -281,6 +281,8 @@ python3 -m compass_cli action plan \
   --playbook "known-page-or-bff-to-link" \
   --knowledge "K001" \
   --json
+
+python3 -m compass_cli action env --action-id A1 --json
 
 python3 -m compass_cli action complete \
   --action-id A1 \
@@ -306,7 +308,7 @@ python3 -m compass_cli report --audience review
 - SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认，不能因为环境配置或便利自行改掉。
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
-- `action plan/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
+- `action plan/env/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
 - `action plan` 会强制注入 `context`：playbook 索引、候选知识、首轮候选方向和已召回 playbook；`--playbook` / `--knowledge` 用来声明本步实际采用了哪些通用上下文，未声明会留下软质量标记。
 - 结论若只定位到连接失败、不可达、超时、离线、校验失败等直接断点，却没有登记变更或变更证据，会触发 `HALF_ROOT_CAUSE` 质量提示；这是软告警，不阻塞，但建议继续追最近变更、时间线、影响面和反证。
 - SQL 行数阈值和 SLS 词表可通过 `.env` 调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。

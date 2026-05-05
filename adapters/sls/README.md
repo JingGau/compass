@@ -10,6 +10,8 @@
 
 ## 使用方法
 
+Agent 自动排查时不要裸调本 adapter；先通过 `compass action plan` 规划 SLS action，再用 `compass action env --action-id <id>` 生成 `COMPASS_ADAPTER_MODE=agent_auto` 等 runtime 变量后执行查询。人工本地调试不设置这些变量。
+
 ```python
 from adapters.sls.client import SLSClient
 

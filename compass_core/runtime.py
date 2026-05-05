@@ -416,6 +416,23 @@ def confirm_action(
     return state, output["action"]
 
 
+def adapter_runtime_env(path: str | Path, *, action_id: str) -> tuple[dict[str, Any], dict[str, str]]:
+    state = _load_state(path)
+    _require_confirmed(state)
+    action = _find_action_plan(state, action_id)
+    if action.get("status") != "planned":
+        raise CompassRuntimeError(
+            f"action {action_id} 状态为 {action.get('status')}，不能生成 adapter 自动执行环境。"
+        )
+    env = {
+        "COMPASS_ADAPTER_MODE": "agent_auto",
+        "COMPASS_AGENT_AUTO": "1",
+        "COMPASS_RUNTIME_STATE_FILE": str(Path(path).resolve()),
+        "COMPASS_RUNTIME_ACTION_ID": action_id,
+    }
+    return action, env
+
+
 def complete_action(
     path: str | Path,
     *,
@@ -1872,12 +1889,18 @@ def _build_next_task(state: dict[str, Any]) -> dict[str, Any]:
         )
     pending = _pending_actions(state)
     if pending:
-        action_id = str(pending[0].get("action_id", ""))
+        action = pending[0]
+        action_id = str(action.get("action_id", ""))
+        track = str(action.get("track", "")).lower()
+        suggested = []
+        if track in {"sls", "sql"}:
+            suggested.append(f"compass action env --action-id {action_id}")
+        suggested.append(f"compass action complete --action-id {action_id} --summary <结果摘要>")
         return _task_card(
             task_type="action_complete",
             rationale="存在 planned action，必须先完成或调整计划。",
             required_inputs=["summary", "finding"],
-            suggested_commands=[f"compass action complete --action-id {action_id} --summary <结果摘要>"],
+            suggested_commands=suggested,
         )
     if not state.get("scene_facts"):
         return _task_card(

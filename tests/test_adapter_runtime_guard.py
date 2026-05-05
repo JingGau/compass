@@ -53,3 +53,47 @@ def test_agent_auto_runtime_guard_rejects_wrong_track(tmp_path, monkeypatch) -> 
     assert blocked is not None
     assert blocked["requires_runtime_action"] is True
     assert "track 不是 sls" in blocked["error"]
+
+
+def test_adapter_mode_agent_auto_enforces_runtime_context(monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_ADAPTER_MODE", "agent_auto")
+    monkeypatch.delenv("COMPASS_AGENT_AUTO", raising=False)
+    monkeypatch.delenv("COMPASS_RUNTIME_STATE_FILE", raising=False)
+    monkeypatch.delenv("COMPASS_RUNTIME_ACTION_ID", raising=False)
+
+    blocked = agent_auto_runtime_guard("sls", "query_logs", expected_track="sls")
+
+    assert blocked is not None
+    assert blocked["requires_runtime_action"] is True
+    assert blocked["adapter_mode"] == "agent_auto"
+    assert "缺少 COMPASS_RUNTIME_STATE_FILE" in blocked["error"]
+
+
+def test_adapter_mode_manual_keeps_human_direct_calls_unblocked(monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_ADAPTER_MODE", "manual")
+    monkeypatch.delenv("COMPASS_AGENT_AUTO", raising=False)
+
+    assert agent_auto_runtime_guard("sls", "query_logs", expected_track="sls") is None
+
+
+def test_legacy_agent_auto_wins_over_manual_mode(monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_ADAPTER_MODE", "manual")
+    monkeypatch.setenv("COMPASS_AGENT_AUTO", "1")
+    monkeypatch.delenv("COMPASS_RUNTIME_STATE_FILE", raising=False)
+    monkeypatch.delenv("COMPASS_RUNTIME_ACTION_ID", raising=False)
+
+    blocked = agent_auto_runtime_guard("platform", "query_sql", expected_track="sql")
+
+    assert blocked is not None
+    assert blocked["adapter_mode"] == "agent_auto"
+
+
+def test_invalid_adapter_mode_fails_closed(monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_ADAPTER_MODE", "maybe")
+    monkeypatch.delenv("COMPASS_AGENT_AUTO", raising=False)
+
+    blocked = agent_auto_runtime_guard("sls", "query_logs", expected_track="sls")
+
+    assert blocked is not None
+    assert blocked["adapter_mode"] == "invalid"
+    assert "COMPASS_ADAPTER_MODE 无效" in blocked["error"]
