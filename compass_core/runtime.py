@@ -201,7 +201,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             return {
                 "phase": phase,
                 "blocked": False,
-                "message": "已有场景事实，请在规划 action 前先召回 playbook。",
+                "message": "已有场景事实，可先召回 playbook；若直接规划 action，runtime 仍会注入候选知识上下文并标记未召回。",
                 "next_actions": ["playbook recall", "action plan", "hypothesis add", "scene fact"],
                 "health": _build_session_health(state),
             }
@@ -287,7 +287,6 @@ def plan_action(
         _require_confirmed(state)
         _require_phase(state, {"action_ready", "evidence_collecting"}, "规划 action")
         _require_scene_facts(state, "规划 action")
-        _require_playbook_recall(state)
         _require_unique_action_id(state, action_id)
         inputs = dict(action_input or {})
         normalized_track = track.lower()
@@ -300,6 +299,8 @@ def plan_action(
         sql_gate_result: SafetyGateResult | None = None
         if normalized_track == "sql":
             sql_gate_result = _enforce_sql_explain_gate(inputs, gates)
+        playbooks = _clean_list(applied_playbooks)
+        knowledge = _clean_list(applied_knowledge)
         action = {
             "action_id": action_id,
             "track": track,
@@ -310,9 +311,8 @@ def plan_action(
             "gate": gates,
             "status": "planned",
             "created_at": now_iso(),
+            "context": _build_action_context(state, track=normalized_track, applied_playbooks=playbooks),
         }
-        playbooks = _clean_list(applied_playbooks)
-        knowledge = _clean_list(applied_knowledge)
         if playbooks:
             action["applied_playbooks"] = playbooks
         if knowledge:
@@ -1828,13 +1828,6 @@ def recall_playbook(
     return _update_runtime_state(path, mutate)
 
 
-def _require_playbook_recall(state: dict[str, Any]) -> None:
-    if not state.get("playbook_recall", {}).get("recalled"):
-        raise CompassRuntimeError(
-            "禁止在召回 playbook 前规划 action。请先运行 compass playbook recall --match <playbook-name>。"
-        )
-
-
 def _find_action_plan(state: dict[str, Any], action_id: str) -> dict[str, Any]:
     for action in state.get("action_plan", []):
         if action.get("action_id") == action_id:
@@ -1876,6 +1869,58 @@ def _build_session_health(state: dict[str, Any]) -> dict[str, Any]:
         "events": len(state.get("events") or []),
         "quality_flags": flags,
     }
+
+
+def _build_action_context(
+    state: dict[str, Any],
+    *,
+    track: str,
+    applied_playbooks: list[str],
+) -> dict[str, Any]:
+    recall = state.get("playbook_recall") or {}
+    matched = _clean_list(recall.get("matched") if isinstance(recall.get("matched"), list) else [])
+    quality_flags: list[str] = []
+    if not recall.get("recalled"):
+        quality_flags.append("PLAYBOOK_RECALL_MISSING")
+    if not applied_playbooks:
+        quality_flags.append("PLAYBOOK_NOT_APPLIED")
+    return {
+        "playbook_index": "knowledge/playbooks/_index.md",
+        "playbook_recall": {
+            "recalled": bool(recall.get("recalled")),
+            "matched": matched,
+            "scene_context": str(recall.get("scene_context") or ""),
+            "recalled_at": str(recall.get("recalled_at") or ""),
+        },
+        "knowledge_candidates": _action_knowledge_candidates(state),
+        "investigation_hints": [
+            {
+                "id": str(item.get("id", "")),
+                "type": str(item.get("type", "")),
+                "statement": str(item.get("statement", "")),
+                "status": str(item.get("status", "")),
+            }
+            for item in (state.get("investigation_hints") or [])
+            if isinstance(item, dict)
+        ],
+        "track": track,
+        "quality_flags": quality_flags,
+    }
+
+
+def _action_knowledge_candidates(state: dict[str, Any]) -> list[dict[str, Any]]:
+    candidates: list[dict[str, Any]] = []
+    for item in state.get("applicable_knowledge") or []:
+        if not isinstance(item, dict):
+            continue
+        candidates.append(
+            {
+                "id": str(item.get("id", "")),
+                "tags": [str(tag) for tag in (item.get("tags") or [])],
+                "statement": str(item.get("statement", "")),
+            }
+        )
+    return candidates
 
 
 def _build_action_history_item(

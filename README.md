@@ -307,7 +307,7 @@ python3 -m compass_cli report --audience review
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
 - `action plan/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
-- `action plan` 可选 `--playbook` / `--knowledge` 记录本步采用的通用 playbook 或知识 id，便于审计“为什么这么查”。
+- `action plan` 会强制注入 `context`：playbook 索引、候选知识、首轮候选方向和已召回 playbook；`--playbook` / `--knowledge` 用来声明本步实际采用了哪些通用上下文，未声明会留下软质量标记。
 - 结论若只定位到连接失败、不可达、超时、离线、校验失败等直接断点，却没有登记变更或变更证据，会触发 `HALF_ROOT_CAUSE` 质量提示；这是软告警，不阻塞，但建议继续追最近变更、时间线、影响面和反证。
 - SQL 行数阈值和 SLS 词表可通过 `.env` 调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。
 - `COMPASS_NON_PROD_RELAX_GATES=1` 只放宽非生产环境门禁；prod 的 Doris EXPLAIN、SLS anchor、keyword_source 仍强制执行。

@@ -33,7 +33,7 @@ new
 - `confirm --mode auto`：首轮人工确认后由 Agent 自动推进后续流程；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。`confirm --mode manual` 才要求每一步查询前等待用户确认。
 - Agent 自动模式直接调用 SLS/Doris adapter 时，必须带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置 `COMPASS_AGENT_AUTO`，不受该保护影响。
 - `scene fact`：在记录假设或写结论前，先用 `category=entrypoint/object/upstream/downstream/config/variant/diff/baseline/repro` 把可引用事实落盘；`category=diff` 强制 value 含对比词（差异/对比/vs/相比/之前/之后/正常/异常/变更等）；建议带 `--event-at` 让事实进入 timeline。
-- `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，可用 `--playbook` / `--knowledge` 记录采用的通用上下文；`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
+- `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，并自动注入 `context`（playbook 索引、候选知识、首轮候选方向、已召回 playbook）。`--playbook` / `--knowledge` 表示本步实际采用了哪些上下文；未声明时写入软质量标记，不阻塞。`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
 - `action confirm`：仅当 `plan` 因 SQL 风险等门禁被锁为 `requires_confirmation` 时使用，由用户明确确认风险后解锁。
 - `change record` / `change list`：登记发布、配置、数据迁移、灰度、权限调整等变更，必填 `--type/--target/--description/--event-at`，进入 timeline 与故障窗口对齐。
 - `timeline`：把所有带 `event_at` 的 changes / scene_facts / evidence 与 action_history 合并为按时间排序的故障时间线。

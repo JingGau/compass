@@ -53,6 +53,31 @@ def has_scene_fact(state_file: Path) -> bool:
     return bool(state.get("scene_facts"))
 
 
+def has_playbook_recall(state_file: Path) -> bool:
+    if not state_file.exists():
+        return False
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return bool((state.get("playbook_recall") or {}).get("recalled"))
+
+
+def run_playbook_recall(
+    state_file: Path,
+    *,
+    match: str = "unknown-entrypoint-log-to-trace",
+) -> subprocess.CompletedProcess[str]:
+    return run_cli(
+        "playbook",
+        "recall",
+        "--state-file",
+        str(state_file),
+        "--match",
+        match,
+    )
+
+
 def run_planned_action(
     state_file: Path,
     *,
@@ -74,7 +99,6 @@ def run_planned_action(
     if ensure_scene and not has_scene_fact(state_file):
         fact = run_scene_fact(state_file)
         assert fact.returncode == 0, fact.stdout + fact.stderr
-
     plan_args = [
         "action",
         "plan",
@@ -1386,7 +1410,12 @@ def test_runtime_records_lightweight_events_for_observability(tmp_path: Path) ->
     assert completed.returncode == 0, completed.stderr
     state = json.loads(completed.stdout)["state"]
     event_types = [event["type"] for event in state["events"]]
-    assert event_types[:4] == ["session_started", "session_confirmed", "scene_fact_recorded", "action_planned"]
+    assert event_types[:4] == [
+        "session_started",
+        "session_confirmed",
+        "scene_fact_recorded",
+        "action_planned",
+    ]
     assert event_types[-1] == "action_completed"
     assert state["events"][-1]["summary"] == "查询完成"
     assert state["events"][-1]["refs"]["action_id"] == "A1"
@@ -1398,6 +1427,7 @@ def test_action_plan_records_applied_playbooks_and_knowledge(tmp_path: Path) -> 
     run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
     run_scene_fact(state_file)
+    run_playbook_recall(state_file, match="direct-failure-to-change-root-cause")
 
     planned = run_cli(
         "action",
@@ -1427,6 +1457,75 @@ def test_action_plan_records_applied_playbooks_and_knowledge(tmp_path: Path) -> 
     assert action["applied_playbooks"] == ["direct-failure-to-change-root-cause"]
     assert action["applied_knowledge"] == ["K001"]
     assert "--playbook direct-failure-to-change-root-cause" in payload["display"]["command_raw"]
+
+
+def test_action_plan_injects_context_without_requiring_recall_step(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "用户截图",
+        "--objective",
+        "根据截图关键字查当时调用日志",
+        "--success-criteria",
+        "action 自动携带 playbook/知识上下文",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    action = json.loads(planned.stdout)["action"]
+    context = action["context"]
+    assert context["playbook_index"] == "knowledge/playbooks/_index.md"
+    assert context["playbook_recall"]["recalled"] is False
+    assert context["investigation_hints"]
+    assert "knowledge_candidates" in context
+    assert "PLAYBOOK_RECALL_MISSING" in context["quality_flags"]
+    assert "PLAYBOOK_NOT_APPLIED" in context["quality_flags"]
+
+
+def test_action_plan_injects_recalled_playbook_context_when_available(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
+    recalled = run_playbook_recall(state_file, match="screenshot-or-keyword-to-runtime-logs")
+    assert recalled.returncode == 0, recalled.stderr
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "用户截图",
+        "--objective",
+        "根据截图关键字查当时调用日志",
+        "--success-criteria",
+        "action 自动携带 playbook 召回上下文",
+        "--playbook",
+        "screenshot-or-keyword-to-runtime-logs",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    context = json.loads(planned.stdout)["action"]["context"]
+    assert context["playbook_recall"]["matched"] == ["screenshot-or-keyword-to-runtime-logs"]
+    assert context["quality_flags"] == []
 
 
 def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
