@@ -38,4 +38,4 @@ def test_agent_auto_launcher_forces_guard_environment() -> None:
 
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
-    assert payload == {"mode": "agent_auto", "agent_auto": "1"}
+    assert payload == {"mode": "runtime", "agent_auto": "1"}

@@ -171,20 +171,27 @@ def _recall_applicable_knowledge(intake: Any, *, top_n: int = 5) -> list[dict[st
     return [m.to_dict() for m in matches]
 
 
-def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
+def confirm_session(path: str | Path, mode: str | None = None) -> dict[str, Any]:
     def mutate(state: dict[str, Any]) -> dict[str, Any]:
         phase = _phase(state)
         if phase not in {"awaiting_confirmation", "action_ready"}:
             raise CompassRuntimeError(f"当前阶段 {phase} 不需要确认。")
+        flow = state.setdefault("flow", {})
         state["flow"].update(
             {
                 "phase": "action_ready",
                 "confirmed": True,
-                "execution_mode": mode,
+                "confirmation_policy": "first_confirm_then_continue_until_gate",
                 "allowed_commands": ["next", "scene fact", "playbook recall", "action plan", "evidence add", "state show"],
             }
         )
-        _append_event(state, "session_confirmed", summary=f"mode={mode}", refs={"phase": "action_ready"})
+        flow.pop("execution_mode", None)
+        _append_event(
+            state,
+            "session_confirmed",
+            summary="session approved; continue until runtime gate or user interruption",
+            refs={"phase": "action_ready", "legacy_mode_arg": str(mode or "")},
+        )
         _touch(state)
         return state
 
@@ -200,7 +207,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
         return {
             "phase": phase,
             "blocked": True,
-            "message": "会话尚未确认执行模式。请先运行 compass confirm。",
+            "message": "会话尚未完成首轮确认。请先运行 compass confirm。",
             "next_actions": ["confirm"],
             "health": _build_session_health(state),
             "task": task,
@@ -438,10 +445,10 @@ def adapter_runtime_env(path: str | Path, *, action_id: str) -> tuple[dict[str, 
         action = _find_action_plan(state, action_id)
         if action.get("status") != "planned":
             raise CompassRuntimeError(
-                f"action {action_id} 状态为 {action.get('status')}，不能生成 adapter 自动执行环境。"
+                f"action {action_id} 状态为 {action.get('status')}，不能生成 adapter runtime 环境。"
             )
         env = {
-            "COMPASS_ADAPTER_MODE": "agent_auto",
+            "COMPASS_ADAPTER_MODE": "runtime",
             "COMPASS_AGENT_AUTO": "1",
             "COMPASS_RUNTIME_STATE_FILE": str(Path(path).resolve()),
             "COMPASS_RUNTIME_ACTION_ID": action_id,
@@ -2112,8 +2119,8 @@ def _build_next_task(state: dict[str, Any]) -> dict[str, Any]:
     if not state.get("flow", {}).get("confirmed"):
         return _task_card(
             task_type="confirm",
-            rationale="首轮人工确认后才能进入自动排查。",
-            suggested_commands=["compass confirm --mode auto"],
+            rationale="首轮人工确认后才能进入排查流程。",
+            suggested_commands=["compass confirm"],
         )
     pending = _pending_actions(state)
     if pending:

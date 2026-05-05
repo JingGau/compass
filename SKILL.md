@@ -12,10 +12,10 @@ Compass 是本地优先的线上问题排查 harness。核心职责不是“让 
 ## Agent Contract
 
 - Skill 只决定“何时启用罗盘”和“如何和用户协作”；状态、门禁、证据、报告由 CLI Runtime 决定。
-- `auto` 模式只需要首轮人工确认；确认后 Agent 按 `next --json` 的 `task` 自动推进，直到用户打断或 runtime 门禁要求确认。
-- Hermes/minimax 等自动 runner 必须通过 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，确保全进程 `COMPASS_ADAPTER_MODE=agent_auto`。
-- 自动 Agent 调 adapter 必须通过 `compass action env --action-id <id>` 获取 action 级 runtime 环境；`manual` 只表示人类直接调试 adapter。
-- 自动 Agent 读代码必须通过 `compass code search/show --action-id <id>`，并且该 id 必须是已规划的 `track=code` action。
+- 罗盘没有会话级执行分支；只需要首轮 `confirm`，之后 Agent 按 `next --json` 的 `task` 持续推进，直到用户打断或 runtime 门禁要求确认。
+- Hermes/minimax 等 runner 必须通过 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，确保全进程 `COMPASS_ADAPTER_MODE=runtime`。
+- Agent 调 adapter 必须通过 `compass action env --action-id <id>` 获取 action 级 runtime 环境；人类临时调试 adapter 不设置这些变量，不进入罗盘证据链。
+- Agent 读代码必须通过 `compass code search/show --action-id <id>`，并且该 id 必须是已规划的 `track=code` action。
 - 如果 Skill 文字和 CLI 输出冲突，以 CLI 输出的 `display`、`health`、`task` 和错误信息为准。
 
 ## When To Use
@@ -37,11 +37,11 @@ Do not use this skill for:
 
 1. 默认使用线上环境 `prod` 排查；只有用户明确指定 test/uat/测试/预发时才切换环境。
 2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。`compass start` 会自动从通用知识库（`memory/knowledge.yaml`）召回 top-5 适用知识，Agent 必须把它们当成"待校对的提示"而不是"已认证的事实"。
-3. 用户确认 `auto` 后，Agent 必须自动按 CLI Runtime 推进，不要每一步都询问是否继续；只有用户主动打断、runtime 硬门禁失败、prod 中高风险 SQL、外部/高风险数据源、缺少关键实体时才暂停请用户决策。`manual` 模式才逐步询问。
+3. 用户完成 `confirm` 后，Agent 必须按 CLI Runtime 持续推进，不要每一步都询问是否继续；只有用户主动打断、runtime 硬门禁失败、prod 中高风险 SQL、外部/高风险数据源、缺少关键实体时才暂停请用户决策。
 4. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程；runtime 会拦截未确认、缺 scene fact、未 report 就策略沉淀等顺序错误。
-   - Hermes/minimax 等自动 runner 必须用 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，不能以人工 `manual` 模式运行。
-   - Agent 自动调用 SLS/Doris adapter 时必须处于已规划 action 上下文：优先运行 `compass action env --action-id <action_id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
-   - Agent 自动读取业务代码时必须先规划 `track=code` action，再用 `compass code search/show --action-id <action_id>`；裸 `rg/sed/cat` 只允许作为人类临时调试，不计入罗盘自动排查证据链。
+   - Hermes/minimax 等 runner 必须用 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，不能绕过 runtime guard。
+   - Agent 调用 SLS/Doris adapter 时必须处于已规划 action 上下文：优先运行 `compass action env --action-id <action_id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
+   - Agent 读取业务代码时必须先规划 `track=code` action，再用 `compass code search/show --action-id <action_id>`；裸 `rg/sed/cat` 只允许作为人类临时调试，不计入罗盘证据链。
 5. 每次制定 `action plan` 前，Agent 必须把 `knowledge/playbooks/` 作为策略参考上下文之一；若匹配到适用 playbook，应在 action objective/source/success-criteria 或后续 evidence finding 中体现采用了哪条 playbook。Playbook 只辅助选择侦查路径，不替代 Runtime 门禁。
 6. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence；没有 scene fact 时 `action plan` 会被拒绝。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
 7. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
@@ -51,14 +51,14 @@ Do not use this skill for:
    - 结构化的根治项请优先用 `--remediation-item "desc=...;owner=@team-x;due=2026-05-15;url=https://...;status=planned"` 形式，无 Owner 的根治项会触发 `REMEDIATION_NO_OWNER` 警告。
 10. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
 11. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
-12. 报告后必须确认是否保留本次最终查询策略；auto 模式下若用户未打断，Agent 可根据复用价值直接 `strategy keep` 或 `strategy discard`，并写明理由。未生成 report 时，`strategy keep/discard` 会被拒绝。
+12. 报告后必须确认是否保留本次最终查询策略；若用户未打断，Agent 可根据复用价值直接 `strategy keep` 或 `strategy discard`，并写明理由。未生成 report 时，`strategy keep/discard` 会被拒绝。
 13. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
 
 最小命令链：
 
 ```bash
 python3 -m compass_cli start "<用户原始问题>"
-python3 -m compass_cli confirm --mode auto
+python3 -m compass_cli confirm
 python3 -m compass_cli next
 python3 -m compass_cli scene fact --category entrypoint --name "<入口名>" --value "<接口/页面/动作>" --source "<证据来源>"
 python3 -m compass_cli action plan --action-id A1 --track sls --source SLS \
@@ -136,9 +136,9 @@ python3 -m compass_cli timeline
 - SLS 查询如果在实体锚点之外追加关键词，关键词必须来自代码常量/日志模板或 SQL 表字段/表结构，并通过 `keyword_source` 声明；不得由 Agent 自己猜。
 - `action plan` 会由 runtime 强制注入 `context`：playbook 索引、候选知识、首轮候选方向和已召回 playbook；采用通用 playbook 或 `memory/knowledge.yaml` 知识时，必须用 `--playbook` / `--knowledge` 显式记录，让报告和审计能看到“为什么这么查”。
 - `next --json` 返回的 `health` 是过程仪表盘，`task` 是下一步任务卡；若出现 `pending_actions`、`open_hypotheses`、`possible_half_root_cause` 等标记，或 task 指向 `sls_plan` / `change_check`，Agent 应优先按任务卡补证据。
-- `task` 指向 planned SLS/SQL action 时，先执行 `compass action env --action-id <id>` 生成 adapter 自动模式环境并写入 `adapter_env_generated` 事件，再调用真实 adapter；不要手写或省略这些变量。
+- `task` 指向 planned SLS/SQL action 时，先执行 `compass action env --action-id <id>` 生成 adapter runtime 环境并写入 `adapter_env_generated` 事件，再调用真实 adapter；不要手写或省略这些变量。
 - `task` 指向 planned code action 时，只能执行 `compass code search/show --action-id <id>`；该 gateway 会校验 `track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 审计事件。
-- 自动排查中禁止用裸 `rg/sed/cat` 代替 `compass code search/show` 读取业务代码；若 CLI gateway 报错，应补 `scene fact`、修正 `action plan` 或请用户确认范围，而不是绕过。
+- Agent 排查中禁止用裸 `rg/sed/cat` 代替 `compass code search/show` 读取业务代码；若 CLI gateway 报错，应补 `scene fact`、修正 `action plan` 或请用户确认范围，而不是绕过。
 - `knowledge/playbooks/rules.yaml` 是给弱模型使用的机器可读 playbook 索引；新增通用 playbook 时，优先同步一条轻量规则，让 Runtime 能生成 task card。
 - 首轮 intake 只能产生 `investigation_hints` 候选排查方向，不能提前创建正式 hypothesis；正式 hypothesis 必须由 scene fact / evidence / change 派生。
 - 结论如果只解释“哪里断了”（连不上、不可达、超时、离线、校验失败），但没有变更/timeline/影响面/反证证据，会触发 `HALF_ROOT_CAUSE`；必须继续追最近变更或把根因降级为待验证。

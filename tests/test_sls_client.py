@@ -62,7 +62,7 @@ default_env: "prod"
 
     assert result["success"] is False
     assert result["requires_runtime_action"] is True
-    assert "禁止 agent 自动模式裸调 adapter" in result["error"]
+    assert "禁止 agent runtime 裸调 adapter" in result["error"]
 
 
 def test_sls_query_defaults_to_seven_days_when_time_is_not_specified() -> None:

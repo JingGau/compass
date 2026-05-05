@@ -236,7 +236,7 @@ Compass 需要 `projects/<name>.md` 作为代码导航地图。这个文件会�
 
 ```bash
 python3 -m compass_cli start "用户礼品卡不展示，手机号 15921195068，今天下午" --json
-python3 -m compass_cli confirm --mode auto --json
+python3 -m compass_cli confirm --json
 python3 -m compass_cli next --json
 ```
 
@@ -252,18 +252,17 @@ Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事
 
 对话中的确认方式：
 
-- 回复 `0` 或“开始/确认/可以”：进入自动模式，Agent 按证据链持续推进。
-- 回复 `M`：进入手动模式，每一步查询前都让你确认工具、轨道和查询范围。
+- 回复“开始/确认/可以”：完成首轮确认，Agent 按证据链持续推进。
 - 回复“停/等等/暂停”：中断当前排查，不继续调用 adapter。
 - 当 Agent 提示 SQL 风险、外部库、非 `all` logstore 或缺少关键实体时，需要你明确确认或补充信息。
 
-`auto` 模式只需要首轮人工确认。之后 Agent 应自动选择日志/代码/数据库等侦查路径并推进 CLI 流程，不逐步询问是否继续；程序只负责流程门禁和安全拦截。`manual` 模式才每一步等用户确认。
+首轮确认只表示“允许本次排查开始”。之后 Agent 应选择日志/代码/数据库等侦查路径并推进 CLI 流程，不逐步询问是否继续；程序负责流程门禁和安全拦截。
 
-Hermes/minimax 等自动 runner 建议通过 `scripts/compass-agent-auto.sh <agent-command>` 启动，强制整个进程处于 `COMPASS_ADAPTER_MODE=agent_auto`，避免弱模型把自己当成人工 adapter 调试者。
+Hermes/minimax 等 runner 建议通过 `scripts/compass-agent-auto.sh <agent-command>` 启动，强制整个进程处于 `COMPASS_ADAPTER_MODE=runtime`，避免弱模型绕过 adapter action 上下文。
 
-Agent 自动模式裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。`action env` 会写入 `adapter_env_generated` 事件，方便审计。人工直接使用 adapter 不设置这些变量，不受该限制。
+Agent 裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。`action env` 会写入 `adapter_env_generated` 事件，方便审计。人工直接使用 adapter 不设置这些变量，不进入罗盘证据链。
 
-Agent 自动读取业务代码也必须走受控入口：先规划 `track=code` action，再使用 `compass code search/show --action-id <id>`。gateway 会校验 `track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 审计事件；裸 `rg/sed/cat` 只适合人类临时调试，不算自动排查证据链。
+Agent 读取业务代码也必须走受控入口：先规划 `track=code` action，再使用 `compass code search/show --action-id <id>`。gateway 会校验 `track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 审计事件；裸 `rg/sed/cat` 只适合人类临时调试，不算罗盘证据链。
 
 关键命令：
 
@@ -327,7 +326,7 @@ python3 -m compass_cli report --audience review
 - SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认，不能因为环境配置或便利自行改掉。
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
-- 自动 Agent 读取代码必须使用 `compass code search/show`；CLI 会校验 planned `track=code` action 和 repo 边界，失败时应修正 action 或补确认，不能绕过。
+- Agent 读取代码必须使用 `compass code search/show`；CLI 会校验 planned `track=code` action 和 repo 边界，失败时应修正 action 或补确认，不能绕过。
 - `action plan/env/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
 - `action plan` 会强制注入 `context`：playbook 索引、候选知识、首轮候选方向和已召回 playbook；`--playbook` / `--knowledge` 用来声明本步实际采用了哪些通用上下文，未声明会留下软质量标记。
 - 结论若只定位到连接失败、不可达、超时、离线、校验失败等直接断点，却没有登记变更或变更证据，会触发 `HALF_ROOT_CAUSE` 质量提示；这是软告警，不阻塞，但建议继续追最近变更、时间线、影响面和反证。

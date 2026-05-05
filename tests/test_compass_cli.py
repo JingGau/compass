@@ -368,6 +368,45 @@ def test_confirm_then_record_action_creates_evidence_and_leads(tmp_path: Path) -
     assert "evidence_graph" not in payload["state"]
 
 
+def test_confirm_is_single_session_approval_not_execution_mode(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--json")
+
+    assert confirmed.returncode == 0, confirmed.stdout + confirmed.stderr
+    flow = json.loads(confirmed.stdout)["state"]["flow"]
+    assert flow["phase"] == "action_ready"
+    assert flow["confirmed"] is True
+    assert flow["confirmation_policy"] == "first_confirm_then_continue_until_gate"
+    assert "execution_mode" not in flow
+
+
+def test_confirm_legacy_mode_argument_does_not_restore_session_modes(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+
+    confirmed = run_cli("confirm", "--state-file", str(state_file), "--mode", "manual", "--json")
+
+    assert confirmed.returncode == 0, confirmed.stdout + confirmed.stderr
+    flow = json.loads(confirmed.stdout)["state"]["flow"]
+    assert flow["confirmation_policy"] == "first_confirm_then_continue_until_gate"
+    assert "execution_mode" not in flow
+
+
+def test_next_and_start_do_not_suggest_confirm_mode(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    started = run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    assert started.returncode == 0, started.stdout + started.stderr
+    assert "compass confirm --mode" not in started.stdout
+    assert "compass confirm" in started.stdout
+
+    next_res = run_cli("next", "--state-file", str(state_file), "--json")
+    assert next_res.returncode == 0, next_res.stdout + next_res.stderr
+    task = json.loads(next_res.stdout)["next"]["task"]
+    assert task["suggested_commands"] == ["compass confirm"]
+
+
 def test_next_guides_agents_to_plan_actions_not_record_after_confirm(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
@@ -1441,12 +1480,12 @@ def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     env = payload["env"]
-    assert env["COMPASS_ADAPTER_MODE"] == "agent_auto"
+    assert env["COMPASS_ADAPTER_MODE"] == "runtime"
     assert env["COMPASS_AGENT_AUTO"] == "1"
     assert env["COMPASS_RUNTIME_STATE_FILE"] == str(state_file.resolve())
     assert env["COMPASS_RUNTIME_ACTION_ID"] == "A1"
     assert payload["display"]["before"].startswith("准备执行：")
-    assert "COMPASS_ADAPTER_MODE=agent_auto" in payload["display"]["command_raw"]
+    assert "COMPASS_ADAPTER_MODE=runtime" in payload["display"]["command_raw"]
     assert "COMPASS_RUNTIME_ACTION_ID=A1" in payload["display"]["command_raw"]
     assert payload["display"]["after"].startswith("结果：")
 
@@ -2566,6 +2605,26 @@ def test_code_show_returns_line_window_and_records_event(tmp_path: Path) -> None
     assert state["events"][-1]["type"] == "code_show_executed"
 
 
+def test_active_guides_do_not_reintroduce_auto_manual_session_modes() -> None:
+    active_docs = [
+        ROOT / "SKILL.md",
+        ROOT / "README.md",
+        ROOT / "references" / "runtime-protocol.md",
+        ROOT / "references" / "intake-and-state.md",
+        ROOT / "prompts" / "query-planning.md",
+        ROOT / "guards" / "sql-safety.md",
+        ROOT / "knowledge" / "playbooks" / "_index.md",
+        ROOT / "adapters" / "sls" / "README.md",
+        ROOT / "adapters" / "platform" / "README.md",
+        ROOT / "scripts" / "compass-agent-auto.sh",
+    ]
+    forbidden = ["自动模式", "手动模式", "自动/手动", "`auto` 模式", "`manual` 模式", "confirm --mode", "execution_mode"]
+    for path in active_docs:
+        text = path.read_text(encoding="utf-8")
+        for phrase in forbidden:
+            assert phrase not in text, f"{path.relative_to(ROOT)} contains {phrase}"
+
+
 def test_report_masks_sensitive_display_values(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
@@ -3073,6 +3132,10 @@ def test_state_show_writes_migrated_schema_back_to_file(tmp_path: Path) -> None:
     assert result.returncode == 0, result.stderr
     persisted = json.loads(state_file.read_text(encoding="utf-8"))
     assert persisted["schema_version"] == 2
+    assert persisted["flow"]["completed_steps"] == []
+    assert persisted["flow"]["confirmed"] is False
+    assert persisted["flow"]["confirmation_policy"] == "first_confirm_then_continue_until_gate"
+    assert "execution_mode" not in persisted["flow"]
     assert persisted["scene_facts"] == []
     assert persisted["action_history"] == []
 def test_report_json_includes_rendered_report_for_audience(tmp_path: Path) -> None:

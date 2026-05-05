@@ -71,9 +71,9 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--json", action="store_true", dest="json_output")
     start.set_defaults(handler=handle_start)
 
-    confirm = subparsers.add_parser("confirm", help="confirm execution mode and unlock actions")
+    confirm = subparsers.add_parser("confirm", help="approve the investigation session and unlock actions")
     confirm.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
-    confirm.add_argument("--mode", choices=("auto", "manual"), default="auto")
+    confirm.add_argument("--mode", choices=("auto", "manual"), default=None, help=argparse.SUPPRESS)
     confirm.add_argument("--json", action="store_true", dest="json_output")
     confirm.set_defaults(handler=handle_confirm)
 
@@ -122,7 +122,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     action_env = action_sub.add_parser(
         "env",
-        help="print runtime environment variables for an agent-auto adapter call",
+        help="print runtime environment variables for a guarded adapter call",
     )
     action_env.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
     action_env.add_argument("--action-id", required=True)
@@ -568,7 +568,7 @@ def handle_start(args: argparse.Namespace) -> int:
                 tags = ",".join(item.get("tags") or [])
                 print(f"[{item.get('id', '')}][{tags}] {item.get('statement', '')}")
         print()
-        print("下一步：运行 compass confirm --mode auto")
+        print("下一步：运行 compass confirm")
     return 0
 
 
@@ -581,7 +581,7 @@ def handle_confirm(args: argparse.Namespace) -> int:
     if args.json_output:
         print_json(payload)
     else:
-        print(f"已确认执行模式：{state['flow']['execution_mode']}")
+        print("已完成首轮确认：后续按 next/task 持续推进，遇到 runtime 门禁或用户打断才暂停。")
         print(f"阶段：{state['flow']['phase']}")
     return 0
 
@@ -756,7 +756,7 @@ def build_action_confirm_display(action: dict[str, Any], note: str) -> dict[str,
 def build_action_env_display(action: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     return {
         "before": (
-            f"准备执行：为 action {action.get('action_id')} 生成 agent 自动 adapter 环境。"
+            f"准备执行：为 action {action.get('action_id')} 生成 adapter runtime 环境。"
             "真实查询必须带着这些变量进入 adapter。"
         ),
         "command_raw": _env_command(env),

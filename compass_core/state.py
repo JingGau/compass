@@ -24,7 +24,12 @@ def default_state() -> dict[str, Any]:
         "session_id": f"sess_{int(datetime.now(timezone.utc).timestamp())}",
         "created_at": now_iso(),
         "updated_at": now_iso(),
-        "flow": {"current_step": 1, "completed_steps": [], "execution_mode": "auto"},
+        "flow": {
+            "current_step": 1,
+            "completed_steps": [],
+            "confirmed": False,
+            "confirmation_policy": "first_confirm_then_continue_until_gate",
+        },
         "revision": 1,
         "mode": "investigation_only",
         "write_policy": "no_code_or_data_mutation",
@@ -87,7 +92,21 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("schema_version", 2)
     migrated.setdefault("created_at", now_iso())
     migrated.setdefault("updated_at", now_iso())
-    migrated.setdefault("flow", {"current_step": 1, "completed_steps": [], "execution_mode": "auto"})
+    migrated.setdefault(
+        "flow",
+        {
+            "current_step": 1,
+            "completed_steps": [],
+            "confirmed": False,
+            "confirmation_policy": "first_confirm_then_continue_until_gate",
+        },
+    )
+    if isinstance(migrated.get("flow"), dict):
+        migrated["flow"].setdefault("current_step", 1)
+        migrated["flow"].setdefault("completed_steps", [])
+        migrated["flow"].setdefault("confirmed", False)
+        migrated["flow"].setdefault("confirmation_policy", "first_confirm_then_continue_until_gate")
+        migrated["flow"].pop("execution_mode", None)
     migrated.setdefault("revision", 1)
     migrated.setdefault("mode", "investigation_only")
     migrated.setdefault("write_policy", "no_code_or_data_mutation")

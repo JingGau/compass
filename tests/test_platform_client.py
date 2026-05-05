@@ -25,4 +25,4 @@ default_profile: "PROD"
 
     assert result["success"] is False
     assert result["requires_runtime_action"] is True
-    assert "禁止 agent 自动模式裸调 adapter" in result["error"]
+    assert "禁止 agent runtime 裸调 adapter" in result["error"]

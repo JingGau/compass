@@ -65,7 +65,7 @@ def test_adapter_mode_agent_auto_enforces_runtime_context(monkeypatch) -> None:
 
     assert blocked is not None
     assert blocked["requires_runtime_action"] is True
-    assert blocked["adapter_mode"] == "agent_auto"
+    assert blocked["adapter_mode"] == "runtime"
     assert "缺少 COMPASS_RUNTIME_STATE_FILE" in blocked["error"]
 
 
@@ -85,7 +85,7 @@ def test_legacy_agent_auto_wins_over_manual_mode(monkeypatch) -> None:
     blocked = agent_auto_runtime_guard("platform", "query_sql", expected_track="sql")
 
     assert blocked is not None
-    assert blocked["adapter_mode"] == "agent_auto"
+    assert blocked["adapter_mode"] == "runtime"
 
 
 def test_invalid_adapter_mode_fails_closed(monkeypatch) -> None:

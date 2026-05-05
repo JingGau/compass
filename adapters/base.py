@@ -137,10 +137,10 @@ _MANUAL_ADAPTER_MODES = {"manual", "human", "user"}
 
 
 def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: str | None = None) -> dict | None:
-    """阻止 agent 自动模式绕过 Compass Runtime 直接查询 adapter。
+    """阻止 Agent 绕过 Compass Runtime 直接查询 adapter。
 
-    人工直接使用 adapter 时不会设置 agent 自动模式变量，因此不受影响。
-    Agent 自动排查必须先通过 action plan 生成 action，再设置 runtime action 上下文进入 adapter。
+    人工直接使用 adapter 时不会设置 runtime 变量，因此不受影响。
+    Agent 排查必须先通过 action plan 生成 action，再设置 runtime action 上下文进入 adapter。
     """
 
     mode = _adapter_runtime_mode()
@@ -189,20 +189,20 @@ def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: st
 
 def _adapter_runtime_mode() -> str:
     if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() in _TRUTHY:
-        return "agent_auto"
+        return "runtime"
     explicit = os.environ.get("COMPASS_ADAPTER_MODE", "").strip().lower()
     if explicit in _AGENT_ADAPTER_MODES:
-        return "agent_auto"
+        return "runtime"
     if explicit in _MANUAL_ADAPTER_MODES or not explicit:
         return "manual"
     return "invalid"
 
 
-def _runtime_guard_block(adapter: str, operation: str, reason: str, *, adapter_mode: str = "agent_auto") -> dict:
+def _runtime_guard_block(adapter: str, operation: str, reason: str, *, adapter_mode: str = "runtime") -> dict:
     return {
         "success": False,
         "data": None,
-        "error": f"禁止 agent 自动模式裸调 adapter：{adapter}.{operation}。请先通过 compass action plan 并携带 runtime action 上下文。原因：{reason}",
+        "error": f"禁止 agent runtime 裸调 adapter：{adapter}.{operation}。请先通过 compass action plan 并携带 runtime action 上下文。原因：{reason}",
         "requires_runtime_action": True,
         "adapter_mode": adapter_mode,
         "adapter": adapter,

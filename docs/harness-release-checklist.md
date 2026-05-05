@@ -17,7 +17,7 @@
 ## 3. 流程功能检查
 
 - `python3 -m compass_cli setup-check --json` 输出最小配置就绪状态
-- `python3 -m compass_cli start "<冒烟问题>" && python3 -m compass_cli confirm --mode auto && python3 -m compass_cli next` 可正常推进 phase
+- `python3 -m compass_cli start "<冒烟问题>" && python3 -m compass_cli confirm && python3 -m compass_cli next` 可正常推进 phase
 - prod 环境 `action plan --track sql` 缺少 `input.explain_text` 时被 runtime 阻断，错误信息明确
 - 中/高风险 SQL `action plan` 后必须经 `action confirm` 才能 `action complete`
 - `compass kb learn` 写入 `memory/knowledge.yaml` 后 `compass kb suggest --query ...` 能召回；`compass start` 后 `state.applicable_knowledge` 字段非空时 CLI 输出"适用知识"提示

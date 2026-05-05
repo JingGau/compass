@@ -28,15 +28,15 @@ new
 
 ## 核心命令
 
-- `start` / `confirm` / `next`：进入排查、确认执行模式、获取下一步建议。`start` 会自动从 `memory/knowledge.yaml` 召回 top-5 相关知识写入 `state.applicable_knowledge`，并把它们加入 hits 计数。
+- `start` / `confirm` / `next`：进入排查、完成首轮确认、获取下一步建议。`start` 会自动从 `memory/knowledge.yaml` 召回 top-5 相关知识写入 `state.applicable_knowledge`，并把它们加入 hits 计数。
 - `next --json`：除下一步建议外，还返回轻量 `health` 摘要和结构化 `task` 任务卡。`health` 包含 scene/evidence/change/pending action/open hypothesis/events 计数，以及 `pending_actions`、`no_changes_recorded`、`open_hypotheses`、`possible_half_root_cause` 等质量标记；`task` 由 `knowledge/playbooks/rules.yaml` 与当前 state 匹配生成，给高速 Agent 一个可执行的下一步。`open_hypotheses` 只统计证据后正式创建的 hypothesis，不统计首轮候选排查方向。
-- `confirm --mode auto`：首轮人工确认后由 Agent 自动推进后续流程；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。`confirm --mode manual` 才要求每一步查询前等待用户确认。
-- Hermes/minimax 等自动 runner 必须用 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，强制进程级 `COMPASS_ADAPTER_MODE=agent_auto`。
-- Agent 自动模式直接调用 SLS/Doris adapter 时，必须先 `action plan`，再运行 `action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=agent_auto`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置这些变量，不受该保护影响。
-- Agent 自动模式读取业务代码时，必须先 `action plan --track code`，再使用 `code search/show --action-id <id>`；gateway 会校验 action 已确认、已规划、`track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 事件。裸 `rg/sed/cat` 只属于人类临时调试，不计入罗盘自动排查证据链。
+- `confirm`：首轮人工确认后由 Agent 按 `next --json.task` 持续推进；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。旧参数 `--mode auto|manual` 仅为兼容老命令，不进入 state。
+- Hermes/minimax 等 runner 必须用 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，强制进程级 `COMPASS_ADAPTER_MODE=runtime`。
+- Agent 调用 SLS/Doris adapter 时，必须先 `action plan`，再运行 `action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置这些变量，不进入罗盘证据链。
+- Agent 读取业务代码时，必须先 `action plan --track code`，再使用 `code search/show --action-id <id>`；gateway 会校验 action 已确认、已规划、`track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 事件。裸 `rg/sed/cat` 只属于人类临时调试，不计入罗盘证据链。
 - `scene fact`：在记录假设或写结论前，先用 `category=entrypoint/object/upstream/downstream/config/variant/diff/baseline/repro` 把可引用事实落盘；`category=diff` 强制 value 含对比词（差异/对比/vs/相比/之前/之后/正常/异常/变更等）；建议带 `--event-at` 让事实进入 timeline。
 - `action plan` → `action complete`：每次实际查询、读代码、拉日志的成对调用；`plan` 前必须已经有至少一条 `scene fact`，否则 runtime 拒绝；`plan` 写目标/输入/成功标准/门禁，并自动注入 `context`（playbook 索引、候选知识、首轮候选方向、已召回 playbook）。`--playbook` / `--knowledge` 表示本步实际采用了哪些上下文；未声明时写入软质量标记，不阻塞。`complete` 写摘要/发现/线索并自动生成 evidence；`complete` 与 `evidence add` 都支持 `--event-at` 进入 timeline。
-- `action env`：只为 status=`planned` 的 action 生成自动 adapter 环境，并写入 `adapter_env_generated` 事件。SLS/SQL 的 `next --json.task.suggested_commands` 会优先提示此命令，防止 Agent 手写或漏写 runtime 变量。
+- `action env`：只为 status=`planned` 的 action 生成 adapter runtime 环境，并写入 `adapter_env_generated` 事件。SLS/SQL 的 `next --json.task.suggested_commands` 会优先提示此命令，防止 Agent 手写或漏写 runtime 变量。
 - `code search/show`：只为 status=`planned` 的 `track=code` action 读取代码。`search` 做字面量搜索并限制结果数，`show` 只返回有界行窗；二者都只能访问 action input.repo 范围内的路径，并输出同一套 `display`（自然语言说明、命令原文、门禁评估、结构化结果）。
 - `action confirm`：仅当 `plan` 因 SQL 风险等门禁被锁为 `requires_confirmation` 时使用，由用户明确确认风险后解锁。
 - `change record` / `change list`：登记发布、配置、数据迁移、灰度、权限调整等变更，必填 `--type/--target/--description/--event-at`，进入 timeline 与故障窗口对齐。
@@ -94,7 +94,7 @@ reopen 会把当前 conclusion 写入 `conclusion_history`，标记 `status=supe
 
 ## Action Card Protocol
 
-任何查询、日志搜索、代码读取、Redis/ES 访问都必须先构造动作卡，再执行。禁止直接调用 adapter 或直接读代码后再补过程说明；自动 Agent 读代码必须走 `compass code search/show`。
+任何查询、日志搜索、代码读取、Redis/ES 访问都必须先构造动作卡，再执行。禁止直接调用 adapter 或直接读代码后再补过程说明；Agent 读代码必须走 `compass code search/show`。
 
 顺序：
 
