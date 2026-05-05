@@ -181,6 +181,7 @@ def render_technical_report(state: dict[str, Any]) -> str:
     lines.extend(_render_changes_section(state))
 
     lines.extend(_render_applicable_knowledge_section(state))
+    lines.extend(_render_investigation_hints_section(state))
 
     lines.extend(["", "## Entities"])
     entities = state.get("entities") or {}
@@ -658,6 +659,19 @@ def _render_applicable_knowledge_section(state: dict[str, Any]) -> list[str]:
         statement = mask_text(str(item.get("statement", "")))
         tags_text = mask_text(tags)
         lines.append(f"- **[{kid}][{tags_text}]** {statement}")
+    return lines
+
+
+def _render_investigation_hints_section(state: dict[str, Any]) -> list[str]:
+    """渲染首轮候选排查方向；它们不是正式 hypothesis。"""
+
+    hints = state.get("investigation_hints") or []
+    if not hints:
+        return []
+    lines = ["", "## 候选排查方向（非正式假设）", ""]
+    lines.append("这些方向来自首轮场景识别，仅用于选择第一批证据动作；正式假设必须由 scene fact / evidence / change 派生。")
+    for item in hints:
+        lines.append(f"- **[{mask_text(str(item.get('id', '')))}]** {mask_text(str(item.get('statement', '')))}")
     return lines
 
 

@@ -29,7 +29,7 @@ new
 ## 核心命令
 
 - `start` / `confirm` / `next`：进入排查、确认执行模式、获取下一步建议。`start` 会自动从 `memory/knowledge.yaml` 召回 top-5 相关知识写入 `state.applicable_knowledge`，并把它们加入 hits 计数。
-- `next --json`：除下一步建议外，还返回轻量 `health` 摘要：scene/evidence/change/pending action/open hypothesis/events 计数，以及 `pending_actions`、`no_changes_recorded`、`open_hypotheses`、`possible_half_root_cause` 等质量标记。
+- `next --json`：除下一步建议外，还返回轻量 `health` 摘要：scene/evidence/change/pending action/open hypothesis/events 计数，以及 `pending_actions`、`no_changes_recorded`、`open_hypotheses`、`possible_half_root_cause` 等质量标记；`open_hypotheses` 只统计证据后正式创建的 hypothesis，不统计首轮候选排查方向。
 - `confirm --mode auto`：首轮人工确认后由 Agent 自动推进后续流程；只有用户打断、runtime 门禁失败、prod 中高风险 SQL、外部/高风险数据源或缺少关键实体时暂停。`confirm --mode manual` 才要求每一步查询前等待用户确认。
 - Agent 自动模式直接调用 SLS/Doris adapter 时，必须带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE` 和 `COMPASS_RUNTIME_ACTION_ID`；adapter 会校验 action 已确认、已规划、track 匹配且 status=planned。缺少上下文时拒绝裸查。人工直接使用 adapter 不设置 `COMPASS_AGENT_AUTO`，不受该保护影响。
 - `scene fact`：在记录假设或写结论前，先用 `category=entrypoint/object/upstream/downstream/config/variant/diff/baseline/repro` 把可引用事实落盘；`category=diff` 强制 value 含对比词（差异/对比/vs/相比/之前/之后/正常/异常/变更等）；建议带 `--event-at` 让事实进入 timeline。

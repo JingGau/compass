@@ -40,6 +40,7 @@ def default_state() -> dict[str, Any]:
         "ruled_out": [],
         "next_actions": [],
         "applicable_knowledge": [],
+        "investigation_hints": [],
         "changes": [],
         "pending_confirmations": [],
         "events": [],
@@ -102,6 +103,7 @@ def migrate_state(state: dict[str, Any]) -> dict[str, Any]:
     migrated.setdefault("ruled_out", [])
     migrated.setdefault("next_actions", [])
     migrated.setdefault("applicable_knowledge", [])
+    migrated.setdefault("investigation_hints", [])
     migrated.setdefault("changes", [])
     migrated.setdefault("pending_confirmations", [])
     migrated.setdefault("events", [])

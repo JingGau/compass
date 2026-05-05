@@ -130,7 +130,21 @@ def test_intake_outputs_structured_json() -> None:
     assert payload["scene"] == "payment"
     assert payload["standard_problem"]
     assert payload["entities"]["order_no"] == "123456"
-    assert "hypotheses" in payload
+    assert "hypotheses" not in payload
+    assert payload["investigation_hints"][0]["type"] == "candidate_direction"
+    assert payload["investigation_hints"][0]["status"] == "reference_only"
+
+
+def test_start_keeps_intake_hints_out_of_formal_hypotheses(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    result = run_cli("start", "某把枪突然充电校验失败，枪号 G001", "--state-file", str(state_file), "--json")
+
+    assert result.returncode == 0, result.stderr
+    state = json.loads(result.stdout)["state"]
+    assert state["hypotheses"] == []
+    assert state["hypothesis_mode"] == "evidence_first"
+    assert state["investigation_hints"]
+    assert state["investigation_hints"][0]["type"] == "candidate_direction"
 
 
 def test_kb_search_reads_markdown_roots(tmp_path: Path) -> None:

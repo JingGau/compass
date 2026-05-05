@@ -1007,6 +1007,11 @@ def handle_intake(args: argparse.Namespace) -> int:
     else:
         print(f"场景: {payload['scene']}")
         print(f"标准化问题: {payload['standard_problem']}")
+        hints = payload.get("investigation_hints") or []
+        if hints:
+            print("候选排查方向（仅供参考，非正式假设）:")
+            for item in hints:
+                print(f"- {item.get('statement', '')}")
         print("下一步:")
         for item in payload["next_actions"]:
             print(f"- {item}")

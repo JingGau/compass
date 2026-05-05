@@ -91,8 +91,9 @@ def start_session(path: str | Path, text: str) -> dict[str, Any]:
     state["write_policy"] = "no_code_or_data_mutation"
     state["entities"] = intake.entities
     state["missing"] = intake.missing
-    state["hypotheses"] = intake.hypotheses
-    state["hypothesis_mode"] = "initial_from_intake"
+    state["hypotheses"] = []
+    state["hypothesis_mode"] = "evidence_first"
+    state["investigation_hints"] = intake.investigation_hints
     state["scene_facts"] = []
     state["next_actions"] = intake.next_actions
     state["applicable_knowledge"] = _recall_applicable_knowledge(intake, top_n=5)

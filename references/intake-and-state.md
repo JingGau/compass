@@ -18,7 +18,7 @@
 | 订单/计费 | 订单号/用户ID + 时间范围 | 结算价、支付方式、退款状态、业务类型 |
 | 日志异常 | 服务名 + 时间范围 + 异常现象 | traceId、tlogId、接口、关键字 |
 
-首轮必须提取：原始问题、标准化问题、识别实体、缺失实体、场景类别、最多 3 个待验证初始假设、首步策略。
+首轮必须提取：原始问题、标准化问题、识别实体、缺失实体、场景类别、最多 3 个候选排查方向、首步策略。
 
 缺失规则：
 
@@ -49,9 +49,11 @@
 - 场景：C端 / B端 / 财务 / 订单 / 充电 / 暂不确定
 - 类别：（对应 memory/categories.yaml）
 
-## 初始假设（待验证）
-| # | 假设 | 需要验证的证据 |
+## 候选排查方向（非正式假设）
+| # | 方向 | 可能需要的证据 |
 |---|------|----------------|
+
+这些方向只用于帮助选择第一批证据动作，不写入正式 `hypotheses`。正式假设必须在 `scene fact` / `evidence` / `change` 之后通过 `hypothesis add` 创建。
 
 ## 环境与工具
 - 使用环境：prod（默认）/ test / uat；未明确指定时填 prod
@@ -97,6 +99,11 @@ hypotheses:
     status: 待验证/支持/排除
     source_facts: [scene_fact_name]
     source_evidence: [E1]
+investigation_hints:
+  - id: D1
+    type: candidate_direction
+    statement: 候选排查方向，不是正式假设
+    status: reference_only
 scene_facts:
   - category: entrypoint/object/upstream/downstream/config/variant
     name: 可引用名称

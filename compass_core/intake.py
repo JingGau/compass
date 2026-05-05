@@ -13,7 +13,7 @@ class IntakeResult:
     environment: str
     entities: dict[str, str | None]
     missing: list[dict[str, str | bool]]
-    hypotheses: list[dict[str, str]]
+    investigation_hints: list[dict[str, str]]
     next_actions: list[str]
 
     def to_dict(self) -> dict:
@@ -34,7 +34,7 @@ def intake_problem(text: str) -> IntakeResult:
     scene = _classify_scene(problem)
     entities = _extract_entities(problem)
     missing = _missing_entities(scene, entities, problem)
-    hypotheses = _hypotheses(scene)
+    investigation_hints = _investigation_hints(scene)
     return IntakeResult(
         ok=True,
         raw_problem=problem,
@@ -43,7 +43,7 @@ def intake_problem(text: str) -> IntakeResult:
         environment=_extract_environment(problem),
         entities=entities,
         missing=missing,
-        hypotheses=hypotheses,
+        investigation_hints=investigation_hints,
         next_actions=_next_actions(missing),
     )
 
@@ -140,7 +140,7 @@ def _standard_problem(text: str, scene: str) -> str:
     return f"{prefix}：{text}"
 
 
-def _hypotheses(scene: str) -> list[dict[str, str]]:
+def _investigation_hints(scene: str) -> list[dict[str, str]]:
     presets = {
         "payment": ["支付回调未到达或处理失败", "支付成功但业务单状态推进失败", "收单渠道与内部支付单映射异常"],
         "settlement": ["清分单生成时机或状态判断异常", "入金通知只作为推送银行的允许信号", "退款垫资与清分状态存在先后顺序差异"],
@@ -149,7 +149,15 @@ def _hypotheses(scene: str) -> list[dict[str, str]]:
         "b_side": ["页面操作对象或权限上下文不完整", "后端接口参数与页面状态不一致", "数据权限过滤导致结果异常"],
         "unknown": ["输入信息不足，需要先补充定位实体"],
     }
-    return [{"id": f"H{i + 1}", "statement": item, "status": "待验证"} for i, item in enumerate(presets.get(scene, presets["unknown"])[:3])]
+    return [
+        {
+            "id": f"D{i + 1}",
+            "type": "candidate_direction",
+            "statement": item,
+            "status": "reference_only",
+        }
+        for i, item in enumerate(presets.get(scene, presets["unknown"])[:3])
+    ]
 
 
 def _next_actions(missing: list[dict[str, str | bool]]) -> list[str]:
