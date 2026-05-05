@@ -108,6 +108,8 @@ python3 -m compass_cli timeline
 - 目标表或库在内部 CDC/Doris 常规库找不到时，必须先按 `knowledge/data-source-index.md` 查代码表名、Doris Internal Catalog、Doris JDBC Catalog、MySQL profile，不得猜库名或表名。
 - prod SQL 必须先 EXPLAIN，风险规则见 `guards/sql-safety.md`。
 - SLS 查询必须有高区分度实体锚点：订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等；禁止用“异常/失败/余额不足/支付/订单”等泛关键词作为主查询。
+- SLS 未指定时间窗时 runtime/adapter 默认查最近一周（`-7d`）；如果能从订单创建、支付创建、事件发生时间等证据推断时间窗，应使用推断时间窗并在 action/evidence 中写明依据。
+- SLS 默认 logstore 固定为 `all`；不得因配置或便利自行改为单服务 logstore，显式使用非 `all` 前必须用户确认。
 - SLS 查询如果在实体锚点之外追加关键词，关键词必须来自代码常量/日志模板或 SQL 表字段/表结构，并通过 `keyword_source` 声明；不得由 Agent 自己猜。
 - 执行 `action plan/confirm/complete` 后必须阅读 CLI 输出里的 `display`：自然语言说明、命令原文、门禁评估和结构化结果都以 runtime 输出为准，不要在对话里自行编造门禁结论。
 - 门禁规则可以通过 `.env` 的 `COMPASS_SQL_GATE_MEDIUM_ROWS` / `COMPASS_SQL_GATE_HIGH_ROWS` / `COMPASS_SLS_GENERIC_KEYWORDS` / `COMPASS_SLS_KEYWORD_SOURCES` 调整；`COMPASS_NON_PROD_RELAX_GATES=1` 只允许放宽 test/uat 等非生产环境，不能关闭 prod SQL EXPLAIN、SLS anchor 或 keyword_source 要求。
@@ -122,7 +124,7 @@ Track 门禁：
 
 | track | 必填 input | 必填 gate |
 |-------|------------|-----------|
-| sls | `query`, `time_range`, `anchor` | `type`, `status`, `keyword_source` |
+| sls | `query`, `time_range`（未指定自动 `-7d`）, `anchor` | `type`, `status`, `keyword_source` |
 | sql | `sql`, `env`，prod 必须额外提供 `explain_text` | `type`（`status` / `risk` / `explain` 由 runtime 解析 EXPLAIN 后真实写入，禁止自报） |
 | code | `repo`, `target` | `type`, `scope` |
 | kb | `query` | `type` |

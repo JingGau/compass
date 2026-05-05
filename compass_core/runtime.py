@@ -262,12 +262,15 @@ def plan_action(
         _require_scene_facts(state, "规划 action")
         _require_unique_action_id(state, action_id)
         inputs = dict(action_input or {})
-        if track.lower() == "sql" and not inputs.get("env"):
+        normalized_track = track.lower()
+        if normalized_track == "sql" and not inputs.get("env"):
             inputs["env"] = str(state.get("environment") or state.get("problem", {}).get("environment") or "prod")
+        if normalized_track == "sls" and not inputs.get("time_range"):
+            inputs["time_range"] = "-7d"
         gates = dict(gate or {})
         _validate_action_plan_fields(track, inputs, gates)
         sql_gate_result: SafetyGateResult | None = None
-        if track.lower() == "sql":
+        if normalized_track == "sql":
             sql_gate_result = _enforce_sql_explain_gate(inputs, gates)
         action = {
             "action_id": action_id,

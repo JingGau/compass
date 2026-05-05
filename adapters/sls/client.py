@@ -103,8 +103,7 @@ class SLSClient(BaseAdapter):
         return project
 
     def _get_logstore(self, env: str, logstore: Optional[str] = None) -> str:
-        profile = self._get_profile(env)
-        return str(logstore or profile.get("logstore") or "all")
+        return str(logstore or "all")
 
     def _check_logstore_confirmation(self, env: Optional[str], logstore: Optional[str], confirmed: bool = False) -> Optional[dict]:
         """非默认 logstore 会改变查询范围，必须先让用户确认。"""
@@ -166,7 +165,7 @@ class SLSClient(BaseAdapter):
         self,
         query: str,
         env: Optional[str] = None,
-        from_time: str = "-1h",
+        from_time: str = "-7d",
         to_time: str = "now",
         limit: int = 20,
         offset: int = 0,
@@ -177,7 +176,7 @@ class SLSClient(BaseAdapter):
         执行 SLS 查询语句。
         query: 支持全文搜索和 SQL 分析，如 "orderId:ORD123" 或 "* | SELECT COUNT(*)"
         env: prod / test / uat，默认 prod
-        from_time/to_time: 支持 "-1h", "-30m", "-7d", "now", ISO 格式
+        from_time/to_time: 支持 "-1h", "-30m", "-7d", "now", ISO 格式；默认最近一周
         """
         blocked = self._check_enabled()
         if blocked:
@@ -249,7 +248,7 @@ class SLSClient(BaseAdapter):
         self,
         keyword: str,
         env: Optional[str] = None,
-        from_time: str = "-24h",
+        from_time: str = "-7d",
         limit: int = 20,
         container: Optional[str] = None,
     ) -> dict:
@@ -265,7 +264,7 @@ class SLSClient(BaseAdapter):
     def analyze_errors(
         self,
         env: Optional[str] = None,
-        from_time: str = "-1h",
+        from_time: str = "-7d",
         top_n: int = 10,
         container: Optional[str] = None,
     ) -> dict:

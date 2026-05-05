@@ -23,6 +23,8 @@ prod SQL 摘要：
 SLS 摘要：
 
 - 查询必须有 `input.anchor`，且 anchor 必须是高区分度实体：订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等。
+- 未指定时间窗时默认 `-7d`；若能从订单创建、支付创建、事件发生时间等证据推断时间窗，优先用推断时间窗并记录依据。
+- 默认 logstore 固定为 `all`；使用非 `all` logstore 必须用户确认。
 - `query` 必须原样包含 `anchor`，禁止先用泛词大范围扫日志。
 - `anchor` 外的额外关键词必须来自代码常量/日志模板或 SQL 字段/表结构，并用 `gate.keyword_source` 声明为 `code/sql/schema/table_field/code_sql`。
 - 禁止使用 Agent 自己猜测的泛关键词：异常、失败、余额不足、支付、订单、充值、退款、回调等。

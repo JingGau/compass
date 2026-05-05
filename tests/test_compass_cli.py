@@ -1554,6 +1554,8 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
         "拿到财务返回和最终响应差异",
         "--input",
         "query=15921195068 AND payment-ways-v2",
+        "--input",
+        "anchor=15921195068",
         "--gate",
         "type=sls",
         "--gate",
@@ -1562,7 +1564,7 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
     )
 
     assert sls_missing_time.returncode == 1
-    assert "track sls 缺少 input 字段：time_range" in json.loads(sls_missing_time.stdout)["error"]
+    assert "track sls 缺少 gate 字段：keyword_source" in json.loads(sls_missing_time.stdout)["error"]
 
     sql_missing_explain = run_cli(
         "action",
@@ -1590,6 +1592,45 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
 
     assert sql_missing_explain.returncode == 1
     assert "input.explain_text" in json.loads(sql_missing_explain.stdout)["error"]
+
+
+def test_sls_action_plan_defaults_time_range_to_seven_days(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "sls",
+        "--source",
+        "SLS",
+        "--objective",
+        "用户未提供时间时按默认一周查日志",
+        "--success-criteria",
+        "生成带默认时间窗的 SLS action",
+        "--input",
+        "query=15921195068",
+        "--input",
+        "anchor=15921195068",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=none",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    payload = json.loads(planned.stdout)
+    assert payload["action"]["input"]["time_range"] == "-7d"
 
 
 def test_non_prod_sls_gate_can_be_relaxed_by_environment_switch(tmp_path: Path, monkeypatch) -> None:

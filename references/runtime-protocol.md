@@ -110,7 +110,9 @@ reopen 会把当前 conclusion 写入 `conclusion_history`，标记 `status=supe
 
 - `phase` 不匹配时，runtime 会抛 `CompassRuntimeError`，禁止推进。
 - `plan_action(track='sql', env='prod')`：必须传 `input.explain_text`，runtime 内部调 `assess_sql_explain` 真验证；中/高风险自动锁住，必须 `action confirm` 后才能 `action complete`。
+- `plan_action(track='sls')`：未提供 `time_range` 时 runtime 自动补 `-7d`；如能从订单创建、支付创建、事件发生时间推断时间窗，应显式传入该时间窗并记录依据。
 - `plan_action(track='sls')`：必须有高区分度实体作为 `anchor`（订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等）；额外关键词必须声明 `keyword_source=code/sql/schema/table_field/code_sql`，禁止 Agent 自己猜业务词。
+- SLS 默认 logstore 固定为 `all`；显式使用非 `all` logstore 必须先用户确认。
 - `action plan/confirm/complete`：CLI 输出必须先给自然语言说明，再给命令原文、门禁评估和结构化结果；JSON 输出使用同一份 `display` 字段。
 - 门禁规则可通过环境变量调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。`COMPASS_NON_PROD_RELAX_GATES=1` 只放宽非生产环境；prod 强制门禁不可关闭。
 - `conclude` 必须满足 8 个结构化字段（`what/where/when/why_technical/why_business/blast_radius/how/inference_chain`），且引用真实存在的 evidence id。

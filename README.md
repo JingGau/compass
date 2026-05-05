@@ -298,7 +298,8 @@ python3 -m compass_cli report --audience review
 - 禁止任何写操作，例如 `INSERT / UPDATE / DELETE / DROP / SET / DEL`。
 - 所有展示给用户的查询结果必须脱敏。
 - prod SQL 必须先 `EXPLAIN`，中高风险必须等待用户确认。
-- SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认。
+- SLS 未指定时间窗时默认查最近一周（`-7d`）；如果能从订单创建、支付创建、事件发生时间等证据推断时间窗，应使用推断时间窗并记录依据。
+- SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认，不能因为环境配置或便利自行改掉。
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
 - `action plan/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
@@ -309,7 +310,7 @@ Track 门禁：
 
 | track | 必填 input | 必填 gate |
 |-------|------------|-----------|
-| sls | `query`, `time_range`, `anchor` | `type`, `status`, `keyword_source` |
+| sls | `query`, `time_range`（未指定自动 `-7d`）, `anchor` | `type`, `status`, `keyword_source` |
 | sql | `sql`, `env`，prod 还需 `explain_text` | `type`（`status` / `risk` / `explain` 由 runtime 真实评估 EXPLAIN 后写入） |
 | code | `repo`, `target` | `type`, `scope` |
 | kb | `query` | `type` |
@@ -423,7 +424,7 @@ SLS 不可用：
 
 - 检查至少存在一个完整 `SLS[index].*` profile。
 - 检查 `SLS[index].PROJECT`、`SLS[index].ACCESS_KEY_ID`、`SLS[index].ACCESS_KEY_SECRET` 是否填写。
-- 默认 `SLS[index].LOGSTORE=all`，换其他 logstore 前需要用户确认。
+- 默认 logstore 固定为 `all`，即使 profile 配置了具体 logstore，也不能静默改变；换其他 logstore 前需要用户确认。
 
 项目扫描找不到服务：
 

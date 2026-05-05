@@ -62,6 +62,8 @@ level:ERROR | SELECT message, COUNT(*) AS cnt GROUP BY message ORDER BY cnt DESC
 
 ## 时间格式
 
+未指定 `from_time` 时默认最近一周（`-7d`）。如果业务证据能推断事件时间，例如订单创建或支付创建时间，应传入推断出的时间窗并在 action/evidence 记录依据。
+
 | 格式 | 示例 | 说明 |
 |------|------|------|
 | 相对时间 | `-1h`, `-30m`, `-7d` | 最近 N 时间 |
@@ -76,7 +78,7 @@ level:ERROR | SELECT message, COUNT(*) AS cnt GROUP BY message ORDER BY cnt DESC
 result = client.search_keyword(
     keyword="598002873",
     container="finance-server",
-    from_time="-2h"
+    from_time="-7d"
 )
 ```
 
@@ -84,7 +86,7 @@ result = client.search_keyword(
 ```python
 result = client.analyze_errors(
     container="finance-server",
-    from_time="-1h",
+    from_time="-7d",
     top_n=10
 )
 ```
@@ -93,7 +95,7 @@ result = client.analyze_errors(
 ```python
 result = client.query_logs(
     query="320101000... AND (ERROR OR Exception)",
-    from_time="-3h",
+    from_time="-7d",
     limit=50
 )
 ```
@@ -103,4 +105,5 @@ result = client.query_logs(
 - 查询范围最大 7 天（guards/query-limits.yaml 限制），超出会截断
 - 单次最多返回 500 条
 - 默认查 prod 环境，测试环境排查传 `env="test"`
+- 默认 logstore 固定为 `all`；显式指定其他 logstore 前必须用户确认
 - `analyze_errors` 返回的是聚合统计，不是原始日志
