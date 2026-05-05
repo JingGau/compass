@@ -166,7 +166,7 @@ def confirm_session(path: str | Path, mode: str = "auto") -> dict[str, Any]:
                 "phase": "action_ready",
                 "confirmed": True,
                 "execution_mode": mode,
-                "allowed_commands": ["next", "scene fact", "action plan", "evidence add", "state show"],
+                "allowed_commands": ["next", "scene fact", "playbook recall", "action plan", "evidence add", "state show"],
             }
         )
         _append_event(state, "session_confirmed", summary=f"mode={mode}", refs={"phase": "action_ready"})
@@ -194,13 +194,21 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "phase": phase,
                 "blocked": False,
                 "message": "请先记录场景事实，展开入口、对象、上下游、配置或差异，再基于事实推进查询和假设。",
-                "next_actions": ["scene fact", "action plan"],
+                "next_actions": ["scene fact", "playbook recall", "action plan"],
+                "health": _build_session_health(state),
+            }
+        if not state.get("playbook_recall", {}).get("recalled"):
+            return {
+                "phase": phase,
+                "blocked": False,
+                "message": "已有场景事实，请在规划 action 前先召回 playbook。",
+                "next_actions": ["playbook recall", "action plan", "hypothesis add", "scene fact"],
                 "health": _build_session_health(state),
             }
         return {
             "phase": phase,
             "blocked": False,
-            "message": "已有场景事实，请继续记录查询证据，或从事实/证据派生新假设。",
+            "message": "已有场景事实和 playbook 召回，请继续记录查询证据，或从事实/证据派生新假设。",
             "next_actions": ["action plan", "hypothesis add", "scene fact"],
             "health": _build_session_health(state),
         }
@@ -279,6 +287,7 @@ def plan_action(
         _require_confirmed(state)
         _require_phase(state, {"action_ready", "evidence_collecting"}, "规划 action")
         _require_scene_facts(state, "规划 action")
+        _require_playbook_recall(state)
         _require_unique_action_id(state, action_id)
         inputs = dict(action_input or {})
         normalized_track = track.lower()
@@ -1780,6 +1789,50 @@ def _require_unique_action_id(state: dict[str, Any], action_id: str) -> None:
     existing.update(str(item.get("action_id")) for item in state.get("action_plan", []))
     if action_id in existing:
         raise CompassRuntimeError(f"action_id 已存在：{action_id}。")
+
+
+def recall_playbook(
+    path: str | Path,
+    *,
+    all: bool = False,
+    matched_playbooks: list[str] | None = None,
+    scene_context: str | None = None,
+) -> dict[str, Any]:
+    if all and matched_playbooks is None:
+        playbook_dir = Path(__file__).parent.parent / "knowledge" / "playbooks"
+        try:
+            all_playbooks = [
+                p.stem for p in playbook_dir.glob("*.md")
+                if p.name != "_index.md"
+            ]
+        except Exception:
+            all_playbooks = []
+        matched = all_playbooks
+        scene_context = scene_context or f"全量召回 {len(all_playbooks)} 个 playbook"
+    else:
+        matched = matched_playbooks or []
+
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_confirmed(state)
+        _require_phase(state, {"action_ready", "evidence_collecting"}, "召回 playbook")
+        state["playbook_recall"] = {
+            "recalled": True,
+            "matched": matched,
+            "scene_context": scene_context or "",
+            "recalled_at": now_iso(),
+        }
+        _append_event(state, "playbook_recalled", summary=f"matched: {', '.join(matched)}")
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
+
+
+def _require_playbook_recall(state: dict[str, Any]) -> None:
+    if not state.get("playbook_recall", {}).get("recalled"):
+        raise CompassRuntimeError(
+            "禁止在召回 playbook 前规划 action。请先运行 compass playbook recall --match <playbook-name>。"
+        )
 
 
 def _find_action_plan(state: dict[str, Any], action_id: str) -> dict[str, Any]:

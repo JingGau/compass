@@ -32,6 +32,7 @@ from compass_core.runtime import (
     mark_report_generated,
     next_step,
     plan_action,
+    recall_playbook,
     record_change,
     reopen_session,
     start_session,
@@ -463,6 +464,32 @@ def build_parser() -> argparse.ArgumentParser:
     )
     kb_list.add_argument("--json", action="store_true", dest="json_output")
     kb_list.set_defaults(handler=handle_kb_list)
+
+    playbook = subparsers.add_parser("playbook", help="record playbook recall before action planning")
+    playbook_sub = playbook.add_subparsers(dest="playbook_command", required=True)
+    playbook_recall = playbook_sub.add_parser("recall", help="record which playbooks were recalled for this session")
+    playbook_recall.add_argument("--state-file", default=str(PROJECT_ROOT / "memory" / "session-state.yaml"))
+    playbook_recall.add_argument(
+        "--match",
+        action="append",
+        default=[],
+        dest="matched_playbooks",
+        help="匹配的 playbook 文件名（不含 .md），可重复传；与 --all 二选一",
+    )
+    playbook_recall.add_argument(
+        "--all",
+        action="store_true",
+        dest="all_playbooks",
+        help="召回 playbooks/ 目录下所有 playbook（不含 _index.md）",
+    )
+    playbook_recall.add_argument(
+        "--scene-context",
+        default=None,
+        dest="scene_context",
+        help="本次召回的场景上下文摘要（可选）",
+    )
+    playbook_recall.add_argument("--json", action="store_true", dest="json_output")
+    playbook_recall.set_defaults(handler=handle_playbook_recall)
 
     state = subparsers.add_parser("state", help="read or initialize investigation state")
     state_sub = state.add_subparsers(dest="state_command", required=True)
@@ -1126,6 +1153,29 @@ def handle_kb_list(args: argparse.Namespace) -> int:
                 print(
                     f"[{item.get('id', '')}][hits={item.get('hits', 0)}][{tags}] {item.get('statement', '')}"
                 )
+    return 0
+
+
+def handle_playbook_recall(args: argparse.Namespace) -> int:
+    if not args.all_playbooks and not args.matched_playbooks:
+        return print_error(SystemExit("必须指定 --all 或 --match"))
+    try:
+        state = recall_playbook(
+            args.state_file,
+            all=args.all_playbooks,
+            matched_playbooks=args.matched_playbooks or None,
+            scene_context=args.scene_context,
+        )
+    except CompassRuntimeError as exc:
+        return print_error(exc)
+    payload = {"ok": True, "state": state}
+    if args.json_output:
+        print_json(payload)
+    else:
+        matched = state.get("playbook_recall", {}).get("matched", [])
+        print(f"已记录 playbook 召回（{len(matched)} 个）：{', '.join(matched)}")
+        if args.scene_context:
+            print(f"场景上下文：{args.scene_context}")
     return 0
 
 
