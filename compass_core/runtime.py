@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 import re
 from typing import Any
@@ -218,19 +219,26 @@ def next_step(path: str | Path) -> dict[str, Any]:
         }
         return payload
     if phase == "concluded":
+        return {
+            "phase": phase,
+            "blocked": False,
+            "message": "排查已输出结论。请先生成报告，再确认是否保留本次最终查询策略。",
+            "next_actions": ["report"],
+        }
+    if phase == "reported":
         review = state.get("strategy_review") or {}
         if review.get("status") == "pending":
             return {
                 "phase": phase,
                 "blocked": False,
-                "message": "排查已输出结论。请先生成报告，并确认是否保留本次最终查询策略。",
-                "next_actions": ["report", "strategy keep", "strategy discard"],
+                "message": "报告已生成。请确认是否保留本次最终查询策略。",
+                "next_actions": ["strategy keep", "strategy discard"],
             }
         return {
             "phase": phase,
             "blocked": False,
-            "message": "排查已输出结论。",
-            "next_actions": ["report"],
+            "message": "排查已结束。可查看报告，或在新信息出现时 reopen。",
+            "next_actions": ["report", "reopen"],
         }
     return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": []}
 
@@ -251,6 +259,7 @@ def plan_action(
     def mutate(state: dict[str, Any]) -> dict[str, Any]:
         _require_confirmed(state)
         _require_phase(state, {"action_ready", "evidence_collecting"}, "规划 action")
+        _require_scene_facts(state, "规划 action")
         _require_unique_action_id(state, action_id)
         inputs = dict(action_input or {})
         if track.lower() == "sql" and not inputs.get("env"):
@@ -543,7 +552,7 @@ def record_change(
 def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
     def mutate(state: dict[str, Any]) -> dict[str, Any]:
         _require_confirmed(state)
-        _require_phase(state, {"concluded"}, "重开排查")
+        _require_phase(state, {"concluded", "reported"}, "重开排查")
         conclusion = state.get("conclusion")
         if not conclusion:
             raise CompassRuntimeError("当前会话没有可重开的结论。")
@@ -562,6 +571,7 @@ def reopen_session(path: str | Path, *, reason: str) -> dict[str, Any]:
             {
                 "phase": "evidence_collecting",
                 "current_step": "reopened",
+                "report_generated": False,
                 "allowed_commands": ["next", "action plan", "action complete", "evidence add", "scene fact", "hypothesis add", "conclude", "state show"],
             }
         )
@@ -919,7 +929,29 @@ def conclude_session(
             {
                 "phase": "concluded",
                 "current_step": "conclusion",
-                "allowed_commands": ["report", "strategy keep", "strategy discard", "state show"],
+                "report_generated": False,
+                "allowed_commands": ["report", "reopen", "state show"],
+            }
+        )
+        _touch(state)
+        return state
+
+    return _update_runtime_state(path, mutate)
+
+
+def mark_report_generated(path: str | Path, *, audience: str) -> dict[str, Any]:
+    def mutate(state: dict[str, Any]) -> dict[str, Any]:
+        _require_phase(state, {"concluded", "reported"}, "标记报告已生成")
+        if not state.get("conclusion"):
+            raise CompassRuntimeError("当前会话没有结论，不能标记报告已生成。")
+        state["flow"].update(
+            {
+                "phase": "reported",
+                "current_step": "report",
+                "report_generated": True,
+                "report_audience": audience,
+                "report_generated_at": now_iso(),
+                "allowed_commands": ["strategy keep", "strategy discard", "reopen", "state show"],
             }
         )
         _touch(state)
@@ -1118,7 +1150,9 @@ def decide_strategy_review(
     output: dict[str, Any] = {}
 
     def mutate(state: dict[str, Any]) -> dict[str, Any]:
-        _require_phase(state, {"concluded"}, "确认策略沉淀")
+        if _phase(state) == "concluded" and not state.get("flow", {}).get("report_generated"):
+            raise CompassRuntimeError("请先生成报告，再确认是否保留本次最终查询策略。")
+        _require_phase(state, {"reported"}, "确认策略沉淀")
         review = state.get("strategy_review") or {}
         if not review:
             raise CompassRuntimeError("当前会话没有待确认的策略沉淀项。请先通过 conclude 输出结论。")
@@ -1140,6 +1174,12 @@ def decide_strategy_review(
         if keep and memory_path:
             _append_strategy_memory(memory_path, review)
 
+        state["flow"].update(
+            {
+                "current_step": "strategy_review",
+                "allowed_commands": ["report", "reopen", "state show"],
+            }
+        )
         _touch(state)
         output["review"] = review
         return state
@@ -1354,13 +1394,26 @@ def _validate_action_plan_fields(track: str, action_input: dict[str, str], gate:
     requirements = TRACK_REQUIREMENTS.get(normalized_track)
     if requirements is None:
         raise CompassRuntimeError(f"未知 action track：{track}。可选：{', '.join(sorted(TRACK_REQUIREMENTS))}。")
-    missing_input = [field for field in requirements["input"] if not action_input.get(field)]
+    required_input = requirements["input"]
+    required_gate = requirements["gate"]
+    relaxed_non_prod = normalized_track in {"sls"} and _non_prod_gate_relax_enabled(action_input, gate)
+    if relaxed_non_prod:
+        required_input = ("query", "time_range")
+        required_gate = ("type",)
+        env = _action_environment(action_input, gate)
+        gate["env"] = env
+        gate.setdefault("status", "passed")
+        gate.setdefault("risk", "low")
+        gate["policy"] = "relaxed_non_prod"
+        gate["assessor"] = "compass.runtime.non_prod_gate_relax"
+
+    missing_input = [field for field in required_input if not action_input.get(field)]
     if missing_input:
         raise CompassRuntimeError(f"track {normalized_track} 缺少 input 字段：{', '.join(missing_input)}。")
-    missing_gate = [field for field in requirements["gate"] if not gate.get(field)]
+    missing_gate = [field for field in required_gate if not gate.get(field)]
     if missing_gate:
         raise CompassRuntimeError(f"track {normalized_track} 缺少 gate 字段：{', '.join(missing_gate)}。")
-    if normalized_track == "sls":
+    if normalized_track == "sls" and not relaxed_non_prod:
         _validate_sls_query_policy(action_input, gate)
 
 
@@ -1415,9 +1468,12 @@ def _validate_sls_query_policy(action_input: dict[str, str], gate: dict[str, str
         raise CompassRuntimeError("SLS 查询的 input.anchor 必须原样出现在 query 中，禁止没有实体锚点的日志搜索。")
     if not _is_distinctive_sls_anchor(anchor):
         raise CompassRuntimeError(f"SLS 查询 anchor 区分度不足：{anchor}。请使用订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等实体。")
-    if source not in SLS_EXTRA_KEYWORD_SOURCES:
+    keyword_sources = _sls_keyword_sources()
+    if source not in keyword_sources:
         raise CompassRuntimeError(
-            "SLS gate.keyword_source 必须是 code/sql/schema/table_field/code_sql/none，"
+            "SLS gate.keyword_source 必须是 "
+            + "/".join(sorted(keyword_sources))
+            + "，"
             "额外关键词只能来自代码常量、日志模板、SQL 表字段或表结构。"
         )
 
@@ -1473,7 +1529,33 @@ def _is_generic_sls_keyword(term: str) -> bool:
     normalized = term.strip().lower()
     if not normalized:
         return True
-    return normalized in GENERIC_SLS_KEYWORDS
+    return normalized in _generic_sls_keywords()
+
+
+def _generic_sls_keywords() -> set[str]:
+    return GENERIC_SLS_KEYWORDS | _csv_env_set("COMPASS_SLS_GENERIC_KEYWORDS")
+
+
+def _sls_keyword_sources() -> set[str]:
+    return _csv_env_set("COMPASS_SLS_KEYWORD_SOURCES") or SLS_EXTRA_KEYWORD_SOURCES
+
+
+def _csv_env_set(name: str) -> set[str]:
+    raw = os.environ.get(name, "")
+    return {item.strip().lower() for item in raw.split(",") if item.strip()}
+
+
+def _non_prod_gate_relax_enabled(action_input: dict[str, str], gate: dict[str, str]) -> bool:
+    return _truthy_env("COMPASS_NON_PROD_RELAX_GATES") and _action_environment(action_input, gate) != "prod"
+
+
+def _action_environment(action_input: dict[str, str], gate: dict[str, str]) -> str:
+    raw = action_input.get("env") or gate.get("env") or gate.get("environment") or "prod"
+    return str(raw).strip().lower() or "prod"
+
+
+def _truthy_env(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _validate_evidence_quality(kind: str, strength: str) -> None:
@@ -1536,6 +1618,11 @@ def _require_phase(state: dict[str, Any], allowed: set[str], action_name: str) -
     phase = _phase(state)
     if phase not in allowed:
         raise CompassRuntimeError(f"当前阶段 {phase} 不允许{action_name}。")
+
+
+def _require_scene_facts(state: dict[str, Any], action_name: str) -> None:
+    if not state.get("scene_facts"):
+        raise CompassRuntimeError(f"缺少场景事实，禁止{action_name}。请先通过 scene fact 记录入口、对象、上下游、配置或差异事实。")
 
 
 def _require_existing_evidence(state: dict[str, Any], evidence_ids: list[str]) -> None:

@@ -246,12 +246,18 @@ python3 -m compass_cli next --json
 scene fact -> action plan -> action complete -> hypothesis add -> conclude -> report -> strategy keep/discard
 ```
 
+Runtime 会硬拦截关键顺序：没有 `scene fact` 不能 `action plan`；`conclude` 后必须先生成 `report`，才能 `strategy keep/discard`；结论后要补证据只能 `reopen`。
+
 对话中的确认方式：
 
 - 回复 `0` 或“开始/确认/可以”：进入自动模式，Agent 按证据链持续推进。
 - 回复 `M`：进入手动模式，每一步查询前都让你确认工具、轨道和查询范围。
 - 回复“停/等等/暂停”：中断当前排查，不继续调用 adapter。
 - 当 Agent 提示 SQL 风险、外部库、非 `all` logstore 或缺少关键实体时，需要你明确确认或补充信息。
+
+`auto` 模式只需要首轮人工确认。之后 Agent 应自动选择日志/代码/数据库等侦查路径并推进 CLI 流程，不逐步询问是否继续；程序只负责流程门禁和安全拦截。`manual` 模式才每一步等用户确认。
+
+Agent 自动模式裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再携带 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID` 执行真实查询。人工直接使用 adapter 不设置这些变量，不受该限制。
 
 关键命令：
 
@@ -295,6 +301,9 @@ python3 -m compass_cli report --audience review
 - SLS 默认使用 `SLS_LOGSTORE=all`；如需使用其他 logstore，必须先让用户确认。
 - SLS 查询必须有高区分度实体锚点，例如订单号、支付单号、手机号、userId、traceId、枪编码、站点名。
 - SLS 额外关键词必须来自代码常量、日志模板、SQL 字段或表结构，并用 `keyword_source` 声明，不能凭感觉猜。
+- `action plan/confirm/complete` 会输出“自然语言说明 + 命令原文 + 门禁评估 + 结构化结果”，JSON 模式下同样提供 `display` 字段。
+- SQL 行数阈值和 SLS 词表可通过 `.env` 调整：`COMPASS_SQL_GATE_MEDIUM_ROWS`、`COMPASS_SQL_GATE_HIGH_ROWS`、`COMPASS_SLS_GENERIC_KEYWORDS`、`COMPASS_SLS_KEYWORD_SOURCES`。
+- `COMPASS_NON_PROD_RELAX_GATES=1` 只放宽非生产环境门禁；prod 的 Doris EXPLAIN、SLS anchor、keyword_source 仍强制执行。
 
 Track 门禁：
 
@@ -370,6 +379,7 @@ python3 -m compass_cli report --audience postmortem
 | 能力 | 命令/字段 | 作用 |
 |------|-----------|------|
 | 通用知识库 | `kb learn / kb suggest / kb list` + `start` 自动召回 | 排查中沉淀小颗粒事实/规则，下次自动注入上下文 |
+| 通用排查 Playbook | `knowledge/playbooks/` | 不确定入口、已知页面/BFF、日志过期转数据等方法论 |
 | 变更登记 | `change record / change list` | 把发布、配置、灰度等变更结构化进 timeline |
 | 故障时间线 | `timeline` + report 头部表 | 把 changes / scene_facts / evidence / actions 按 event_at 排序 |
 | baseline / diff 事实 | `scene fact --category baseline / --category diff` | 显式登记"正常态 vs 异常态"对比，category=diff 强制有对比词 |

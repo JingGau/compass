@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
 from dataclasses import asdict, is_dataclass
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from compass_core.runtime import (
     confirm_action,
     confirm_session,
     decide_strategy_review,
+    mark_report_generated,
     next_step,
     plan_action,
     record_change,
@@ -535,11 +537,12 @@ def handle_action_plan(args: argparse.Namespace) -> int:
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
-    payload = {"ok": True, "action": action, "state": state}
+    display = build_action_plan_display(action)
+    payload = {"ok": True, "action": action, "display": display, "state": state}
     if args.json_output:
         print_json(payload)
     else:
-        print(f"已规划 action {action['action_id']}：{action['objective']}")
+        print_action_display(display)
     return 0
 
 
@@ -552,13 +555,12 @@ def handle_action_confirm(args: argparse.Namespace) -> int:
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
-    payload = {"ok": True, "action": action, "state": state}
+    display = build_action_confirm_display(action, args.note)
+    payload = {"ok": True, "action": action, "display": display, "state": state}
     if args.json_output:
         print_json(payload)
     else:
-        print(f"已确认 action {args.action_id} 风险，可继续 action complete。")
-        if args.note:
-            print(f"备注：{args.note}")
+        print_action_display(display)
     return 0
 
 
@@ -579,12 +581,112 @@ def handle_action_complete(args: argparse.Namespace) -> int:
         )
     except CompassRuntimeError as exc:
         return print_error(exc)
-    payload = {"ok": True, "evidence": evidence, "state": state}
+    display = build_action_complete_display(args.action_id, evidence)
+    payload = {"ok": True, "evidence": evidence, "display": display, "state": state}
     if args.json_output:
         print_json(payload)
     else:
-        print(f"已完成 action {args.action_id}，生成证据 {evidence['id']}：{evidence['summary']}")
+        print_action_display(display)
     return 0
+
+
+def build_action_plan_display(action: dict[str, Any]) -> dict[str, Any]:
+    gate = action.get("gate") or {}
+    return {
+        "before": (
+            f"准备执行：{action.get('objective', '')}。"
+            f"来源 {action.get('source', '')}，轨道 {action.get('track', '')}；"
+            f"成功标准：{action.get('success_criteria', '')}。"
+        ),
+        "command_raw": _action_plan_command(action),
+        "gate": _gate_summary(gate),
+        "after": (
+            f"结果：action {action.get('action_id')} 已进入 {action.get('status')} 状态；"
+            "执行真实查询后请用 action complete 写入证据。"
+        ),
+        "result_raw": action,
+    }
+
+
+def build_action_confirm_display(action: dict[str, Any], note: str) -> dict[str, Any]:
+    return {
+        "before": f"准备确认：action {action.get('action_id')} 的门禁风险已由用户确认。",
+        "command_raw": _command(["compass", "action", "confirm", "--action-id", str(action.get("action_id", "")), "--note", note]),
+        "gate": _gate_summary(action.get("gate") or {}),
+        "after": f"结果：action {action.get('action_id')} 已解锁，可继续 action complete。",
+        "result_raw": action,
+    }
+
+
+def build_action_complete_display(action_id: str, evidence: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "before": f"准备记录：action {action_id} 的执行结果将写成 evidence。",
+        "command_raw": _command(["compass", "action", "complete", "--action-id", action_id, "--summary", str(evidence.get("summary", ""))]),
+        "gate": "",
+        "after": f"执行结论：生成证据 {evidence.get('id')}，{evidence.get('summary', '')}",
+        "result_raw": evidence,
+    }
+
+
+def print_action_display(display: dict[str, Any]) -> None:
+    print(display["before"])
+    print("命令原文：")
+    print(display["command_raw"])
+    if display.get("gate"):
+        print(display["gate"])
+    print(display["after"])
+
+
+def _action_plan_command(action: dict[str, Any]) -> str:
+    parts = [
+        "compass",
+        "action",
+        "plan",
+        "--action-id",
+        str(action.get("action_id", "")),
+        "--track",
+        str(action.get("track", "")),
+        "--source",
+        str(action.get("source", "")),
+        "--objective",
+        str(action.get("objective", "")),
+        "--success-criteria",
+        str(action.get("success_criteria", "")),
+    ]
+    for key, value in (action.get("input") or {}).items():
+        parts.extend(["--input", f"{key}={value}"])
+    for key, value in (action.get("gate") or {}).items():
+        if key == "explain_text":
+            continue
+        parts.extend(["--gate", f"{key}={value}"])
+    return _command(parts)
+
+
+def _gate_summary(gate: dict[str, Any]) -> str:
+    if not gate:
+        return "门禁评估：无额外门禁。"
+    gate_type = str(gate.get("type") or "unknown")
+    status = str(gate.get("status") or "passed")
+    risk = str(gate.get("risk") or "low")
+    status_text = {
+        "passed": "通过",
+        "warning": "需确认",
+        "blocked": "阻塞",
+        "requires_confirmation": "需确认",
+    }.get(status, status)
+    details: list[str] = []
+    if gate_type == "sls":
+        details.append(f"keyword_source={gate.get('keyword_source', '')}")
+    if gate_type == "sql":
+        details.append(f"risk={risk}")
+        if gate.get("rows"):
+            details.append(f"rows={gate.get('rows')}")
+    suffix = f"（{'; '.join(item for item in details if item)}）" if details else ""
+    return f"门禁评估：{status_text}{suffix}。"
+
+
+def _command(parts: list[str]) -> str:
+    return " ".join(shlex.quote(str(part)) for part in parts if str(part) != "")
 
 
 def handle_evidence_add(args: argparse.Namespace) -> int:
@@ -1014,6 +1116,9 @@ def handle_state_show(args: argparse.Namespace) -> int:
 def handle_report(args: argparse.Namespace) -> int:
     state = load_state(args.state_file)
     report = render_markdown_report(state, audience=args.audience)
+    flow = state.get("flow") or {}
+    if flow.get("phase") in {"concluded", "reported"} and state.get("conclusion"):
+        state = mark_report_generated(args.state_file, audience=args.audience)
     if args.format == "json":
         print_json({"ok": True, "audience": args.audience, "report": report, "state": state})
     else:

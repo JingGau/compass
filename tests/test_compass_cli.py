@@ -19,6 +19,40 @@ def run_cli(*args: str, cwd: Path = ROOT) -> subprocess.CompletedProcess[str]:
     )
 
 
+def run_scene_fact(
+    state_file: Path,
+    *,
+    category: str = "entrypoint",
+    name: str = "app_payment_ways",
+    value: str = "/app/gun/payment-ways-v2",
+    source: str = "用户问题",
+) -> subprocess.CompletedProcess[str]:
+    return run_cli(
+        "scene",
+        "fact",
+        "--state-file",
+        str(state_file),
+        "--category",
+        category,
+        "--name",
+        name,
+        "--value",
+        value,
+        "--source",
+        source,
+    )
+
+
+def has_scene_fact(state_file: Path) -> bool:
+    if not state_file.exists():
+        return False
+    try:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return False
+    return bool(state.get("scene_facts"))
+
+
 def run_planned_action(
     state_file: Path,
     *,
@@ -35,7 +69,12 @@ def run_planned_action(
     leads: list[str] | None = None,
     supports: str | None = None,
     json_output: bool = False,
+    ensure_scene: bool = True,
 ) -> subprocess.CompletedProcess[str]:
+    if ensure_scene and not has_scene_fact(state_file):
+        fact = run_scene_fact(state_file)
+        assert fact.returncode == 0, fact.stdout + fact.stderr
+
     plan_args = [
         "action",
         "plan",
@@ -219,6 +258,7 @@ def test_sql_action_plan_defaults_to_session_environment_prod(tmp_path: Path) ->
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     explain_low = (
         "0:VOlapScanNode(204)\n"
@@ -325,6 +365,33 @@ def test_next_guides_agents_to_plan_actions_not_record_after_confirm(tmp_path: P
     assert "invalid choice" in recorded.stderr
 
 
+def test_action_plan_requires_scene_fact_first(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+
+    blocked = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "SLS",
+        "--objective",
+        "查询支付方式链路",
+        "--success-criteria",
+        "产生可引用证据",
+        "--json",
+    )
+
+    assert blocked.returncode == 1
+    assert "缺少场景事实" in json.loads(blocked.stdout)["error"]
+
+
 def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
@@ -416,11 +483,12 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert payload["state"]["conclusion"]["evidence"] == ["E1"]
     assert payload["state"]["conclusion"]["details"]["what"] == "用户切换支付方式后礼品卡不展示"
     assert payload["state"]["strategy_review"]["status"] == "pending"
-    assert "strategy keep" in payload["state"]["flow"]["allowed_commands"]
+    assert "report" in payload["state"]["flow"]["allowed_commands"]
+    assert "strategy keep" not in payload["state"]["flow"]["allowed_commands"]
 
     next_result = run_cli("next", "--state-file", str(state_file), "--json")
     next_payload = json.loads(next_result.stdout)
-    assert "确认是否保留" in next_payload["next"]["message"]
+    assert "生成报告" in next_payload["next"]["message"]
 
     report = run_cli("report", "--state-file", str(state_file), "--audience", "review")
     assert report.returncode == 0, report.stderr
@@ -442,6 +510,7 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     assert kept.returncode == 0, kept.stderr
     kept_payload = json.loads(kept.stdout)
     assert kept_payload["strategy_review"]["status"] == "kept"
+    assert "strategy keep" not in kept_payload["state"]["flow"]["allowed_commands"]
     import yaml
 
     memory_payload = yaml.safe_load(memory_file.read_text(encoding="utf-8"))
@@ -463,6 +532,61 @@ def test_conclude_requires_valid_evidence_refs_and_structured_fields(tmp_path: P
     )
     assert duplicate_keep.returncode == 1
     assert "策略沉淀已确认" in json.loads(duplicate_keep.stdout)["error"]
+
+
+def test_strategy_review_requires_report_after_conclusion(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    memory_file = tmp_path / "strategies.yaml"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+    run_planned_action(state_file, ensure_scene=False)
+    run_cli(
+        "conclude",
+        "--state-file",
+        str(state_file),
+        "--conclusion",
+        "礼品卡在 guan-zhong payment-ways-v2 链路被过滤",
+        "--evidence",
+        "E1",
+        "--what",
+        "用户切换支付方式后礼品卡不展示",
+        "--where",
+        "guan-zhong /app/gun/payment-ways-v2",
+        "--when",
+        "2026-04-25 16:51 前后",
+        "--why-technical",
+        "payment-ways-v2 链路未填充 tradeModes",
+        "--why-business",
+        "用户在国网互联站 App 端切换支付方式",
+        "--blast-radius",
+        "已知影响该用户在该站 App 切换支付方式场景",
+        "--how",
+        "App 切换支付方式 → guan-zhong 过滤礼品卡",
+        "--inference-chain",
+        "财务返回礼品卡 → guan-zhong 最终响应无礼品卡 → 代码过滤点命中",
+    )
+
+    blocked = run_cli(
+        "strategy",
+        "keep",
+        "--state-file",
+        str(state_file),
+        "--memory-file",
+        str(memory_file),
+        "--note",
+        "App 支付方式过滤类问题可复用",
+        "--json",
+    )
+
+    assert blocked.returncode == 1
+    assert "请先生成报告" in json.loads(blocked.stdout)["error"]
+
+    report = run_cli("report", "--state-file", str(state_file), "--audience", "review", "--format", "json")
+    assert report.returncode == 0, report.stderr
+    report_payload = json.loads(report.stdout)
+    assert report_payload["state"]["flow"]["report_generated"] is True
+    assert "strategy keep" in report_payload["state"]["flow"]["allowed_commands"]
 
 
 def test_strategy_memory_preserves_planned_action_query_path(tmp_path: Path) -> None:
@@ -552,6 +676,7 @@ def test_strategy_memory_preserves_planned_action_query_path(tmp_path: Path) -> 
         "用户描述预付 20 元和余额充值 10 元 → SLS 显示下发 balanceAmount=10 → 定位为启动链路余额来源错误",
     )
     assert concluded.returncode == 0, concluded.stderr
+    run_cli("report", "--state-file", str(state_file), "--audience", "review")
     kept = run_cli(
         "strategy",
         "keep",
@@ -620,6 +745,7 @@ def test_strategy_keep_rejects_invalid_strategy_memory_shape(tmp_path: Path) -> 
         "--inference-chain",
         "财务返回礼品卡 → guan-zhong 最终响应无礼品卡 → 代码过滤点命中",
     )
+    run_cli("report", "--state-file", str(state_file), "--audience", "review")
 
     kept = run_cli(
         "strategy",
@@ -1070,6 +1196,7 @@ def test_action_plan_then_complete_creates_evidence_and_history(tmp_path: Path) 
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     planned = run_cli(
         "action",
@@ -1140,6 +1267,142 @@ def test_action_plan_then_complete_creates_evidence_and_history(tmp_path: Path) 
     assert history["output"]["summary"] == "财务返回礼品卡，guan-zhong 最终响应无礼品卡"
 
 
+def test_action_plan_and_complete_render_natural_language_display(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "sls",
+        "--source",
+        "SLS",
+        "--objective",
+        "确认财务是否返回礼品卡",
+        "--success-criteria",
+        "拿到 payment-ways-v2 trace 中财务返回和最终响应差异",
+        "--input",
+        "query=15921195068 AND payment-ways-v2",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--input",
+        "anchor=15921195068",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=code",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    assert "准备执行：" in planned.stdout
+    assert "命令原文：" in planned.stdout
+    assert "compass action plan --action-id A1" in planned.stdout
+    assert "门禁评估：通过" in planned.stdout
+    assert "结果：" in planned.stdout
+    assert "结果原文：" not in planned.stdout
+    assert '"action_id"' not in planned.stdout
+
+    completed = run_cli(
+        "action",
+        "complete",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--summary",
+        "财务返回礼品卡，最终响应无礼品卡",
+        "--finding",
+        "finance returned gift card",
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "执行结论：" in completed.stdout
+    assert "生成证据 E1" in completed.stdout
+    assert "结果原文：" not in completed.stdout
+    assert '"summary"' not in completed.stdout
+
+
+def test_action_plan_json_includes_display_contract(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    planned = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "manual",
+        "--source",
+        "用户补充",
+        "--objective",
+        "确认用户端操作路径",
+        "--success-criteria",
+        "用户确认 App 切换支付方式后礼品卡消失",
+        "--json",
+    )
+
+    assert planned.returncode == 0, planned.stderr
+    display = json.loads(planned.stdout)["display"]
+    assert display["before"].startswith("准备执行：")
+    assert display["command_raw"].startswith("compass action plan --action-id A1")
+    assert display["after"].startswith("结果：")
+
+
+def test_sls_generic_keywords_can_be_configured_by_environment(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_SLS_GENERIC_KEYWORDS", "payment-ways-v2")
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    blocked = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "A1",
+        "--track",
+        "sls",
+        "--source",
+        "SLS",
+        "--objective",
+        "确认财务是否返回礼品卡",
+        "--success-criteria",
+        "拿到 payment-ways-v2 trace 中财务返回和最终响应差异",
+        "--input",
+        "query=15921195068 AND payment-ways-v2",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--input",
+        "anchor=15921195068",
+        "--gate",
+        "type=sls",
+        "--gate",
+        "status=passed",
+        "--gate",
+        "keyword_source=code",
+        "--json",
+    )
+
+    assert blocked.returncode == 1
+    assert "payment-ways-v2" in json.loads(blocked.stdout)["error"]
+
+
 def test_action_complete_rejects_unplanned_action(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
@@ -1165,6 +1428,7 @@ def test_action_complete_rejects_already_completed_action(tmp_path: Path) -> Non
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
     run_cli(
         "action",
         "plan",
@@ -1271,6 +1535,7 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     sls_missing_time = run_cli(
         "action",
@@ -1327,10 +1592,85 @@ def test_action_plan_requires_track_specific_fields(tmp_path: Path) -> None:
     assert "input.explain_text" in json.loads(sql_missing_explain.stdout)["error"]
 
 
+def test_non_prod_sls_gate_can_be_relaxed_by_environment_switch(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_NON_PROD_RELAX_GATES", "1")
+    state_file = tmp_path / "session.json"
+    run_cli("start", "uat 用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    relaxed = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SLSUAT",
+        "--track",
+        "sls",
+        "--source",
+        "SLS-UAT",
+        "--objective",
+        "在 UAT 查询宽松日志关键词",
+        "--success-criteria",
+        "命中测试日志即可",
+        "--input",
+        "query=异常 支付",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--input",
+        "env=uat",
+        "--gate",
+        "type=sls",
+        "--json",
+    )
+
+    assert relaxed.returncode == 0, relaxed.stderr
+    action = json.loads(relaxed.stdout)["action"]
+    assert action["gate"]["policy"] == "relaxed_non_prod"
+    assert action["gate"]["env"] == "uat"
+
+
+def test_non_prod_gate_switch_does_not_relax_prod_sls(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("COMPASS_NON_PROD_RELAX_GATES", "1")
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
+
+    blocked = run_cli(
+        "action",
+        "plan",
+        "--state-file",
+        str(state_file),
+        "--action-id",
+        "SLSPROD",
+        "--track",
+        "sls",
+        "--source",
+        "SLS",
+        "--objective",
+        "生产日志仍必须有实体锚点",
+        "--success-criteria",
+        "不能绕过生产门禁",
+        "--input",
+        "query=异常 支付",
+        "--input",
+        "time_range=2026-04-25 16:40~17:10",
+        "--gate",
+        "type=sls",
+        "--json",
+    )
+
+    assert blocked.returncode == 1
+    assert "缺少 input 字段：anchor" in json.loads(blocked.stdout)["error"]
+
+
 def test_action_plan_accepts_valid_track_specific_fields(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     valid = run_cli(
         "action",
@@ -1372,6 +1712,7 @@ def test_sls_action_plan_requires_distinctive_anchor_and_keyword_source(tmp_path
     state_file = tmp_path / "session.json"
     run_cli("start", "充电单号 2604251117229860 余额不足停充", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file, name="charge_start", value="预付款启动充电", source="用户问题")
 
     generic_anchor = run_cli(
         "action",
@@ -1476,6 +1817,7 @@ def test_action_plan_validates_code_kb_and_unknown_tracks(tmp_path: Path) -> Non
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     code_missing_target = run_cli(
         "action",
@@ -1551,6 +1893,7 @@ def test_manual_action_plan_allows_empty_input_and_gate(tmp_path: Path) -> None:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
 
     manual = run_cli(
         "action",
@@ -1659,11 +2002,20 @@ def test_conclude_requires_scene_facts_before_hypothesis_lock_in(tmp_path: Path)
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
-    run_planned_action(
-        state_file,
-        summary="财务返回礼品卡",
-        supports="H2",
+    added = run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "SLS",
+        "--summary",
+        "财务返回礼品卡",
+        "--supports",
+        "H2",
+        "--json",
     )
+    assert added.returncode == 0, added.stderr
 
     blocked = run_cli(
         "conclude",
@@ -2289,6 +2641,7 @@ def _start_sql_session(tmp_path: Path) -> Path:
     state_file = tmp_path / "session.json"
     run_cli("start", "用户礼品卡不展示，手机号 15921195068，今天下午", "--state-file", str(state_file))
     run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file)
     return state_file
 
 

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import re
 
 from tools.action_cards import SafetyGateResult
+from tools.env_config import int_env
 
 
 @dataclass
@@ -60,22 +61,23 @@ def assess_sql_explain(sql: str, explain_text: str, environment: str) -> SafetyG
             details=details,
             requires_confirmation=True,
         )
-    if rows > 1_000_000:
+    medium_rows, high_rows = _row_thresholds()
+    if rows > high_rows:
         return SafetyGateResult(
             gate_type="sql",
             status="blocked",
             risk_level="high",
-            summary=f"预估扫描约 {rows} 行，超过 100 万行高风险阈值",
-            details=details,
+            summary=f"预估扫描约 {rows} 行，超过 {high_rows} 行高风险阈值",
+            details={**details, "medium_rows": medium_rows, "high_rows": high_rows},
             requires_confirmation=True,
         )
-    if rows >= 100_000:
+    if rows >= medium_rows:
         return SafetyGateResult(
             gate_type="sql",
             status="warning",
             risk_level="medium",
-            summary=f"预估扫描约 {rows} 行，需用户确认后执行",
-            details=details,
+            summary=f"预估扫描约 {rows} 行，达到 {medium_rows} 行中风险阈值，需用户确认后执行",
+            details={**details, "medium_rows": medium_rows, "high_rows": high_rows},
             requires_confirmation=True,
         )
     return SafetyGateResult(
@@ -83,9 +85,17 @@ def assess_sql_explain(sql: str, explain_text: str, environment: str) -> SafetyG
         status="passed",
         risk_level="low",
         summary=f"预估扫描约 {rows} 行，低风险自动继续",
-        details=details,
+        details={**details, "medium_rows": medium_rows, "high_rows": high_rows},
         requires_confirmation=False,
     )
+
+
+def _row_thresholds() -> tuple[int, int]:
+    medium_rows = int_env("COMPASS_SQL_GATE_MEDIUM_ROWS", 100_000)
+    high_rows = int_env("COMPASS_SQL_GATE_HIGH_ROWS", 1_000_000)
+    if medium_rows <= 0 or high_rows <= medium_rows:
+        return 100_000, 1_000_000
+    return medium_rows, high_rows
 
 
 def _int_match(pattern: str, text: str) -> int | None:
@@ -100,4 +110,3 @@ def _str_match(pattern: str, text: str) -> str | None:
     if not match:
         return None
     return match.group(1).strip()
-

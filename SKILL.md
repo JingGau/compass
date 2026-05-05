@@ -28,17 +28,19 @@ Do not use this skill for:
 
 1. 默认使用线上环境 `prod` 排查；只有用户明确指定 test/uat/测试/预发时才切换环境。
 2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。`compass start` 会自动从通用知识库（`memory/knowledge.yaml`）召回 top-5 适用知识，Agent 必须把它们当成"待校对的提示"而不是"已认证的事实"。
-3. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程。
-4. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
-5. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
-6. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
-7. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
+3. 用户确认 `auto` 后，Agent 必须自动按 CLI Runtime 推进，不要每一步都询问是否继续；只有用户主动打断、runtime 硬门禁失败、prod 中高风险 SQL、外部/高风险数据源、缺少关键实体时才暂停请用户决策。`manual` 模式才逐步询问。
+4. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程；runtime 会拦截未确认、缺 scene fact、未 report 就策略沉淀等顺序错误。
+   - Agent 自动调用 SLS/Doris adapter 时必须处于已规划 action 上下文：设置 `COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
+5. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence；没有 scene fact 时 `action plan` 会被拒绝。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。
+6. 新假设必须引用 scene fact 或 evidence；建议同时通过 `--falsifiable` 给假设填反证条件（"如果 X 不成立则该假设不成立"），让结论可证伪。
+7. 排查过程中如果定位到疑似变更（发布、配置、数据迁移、灰度等），必须用 `compass change record --type ... --target ... --description ... --event-at ...` 登记，进入故障 timeline 与变更窗口。
+8. 结论必须通过 `conclude`，引用已存在 evidence，并填写结构化细节；同时必须显式给出 `--mitigation`（止血）和 `--remediation`（根治），未解之谜走 `--unsolved`，同类扫描方向走 `--pattern-scan`，引用的关键假设走 `--hypothesis`。`conclude` 输出的 `quality_warnings` 必须读完并响应。
    - **强烈建议**同时提供：`--tldr "<≤3 句执行摘要>"`、`--severity sev1|sev2|sev3|sev4`、以及四个时间戳 `--detected-at / --acknowledged-at / --mitigated-at / --resolved-at`；这些字段直接驱动报告头部的 TL;DR 卡片与 MTTD/MTTM/MTTR 时序表。
    - 结构化的根治项请优先用 `--remediation-item "desc=...;owner=@team-x;due=2026-05-15;url=https://...;status=planned"` 形式，无 Owner 的根治项会触发 `REMEDIATION_NO_OWNER` 警告。
-8. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
-9. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
-10. 报告后必须主动询问用户是否保留本次最终查询策略；用户确认后用 `strategy keep` 沉淀，用户否认后用 `strategy discard` 记录原因。
-11. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
+9. 如结论后出现新信息，使用 `reopen --reason ...` 进入新 revision，不要直接补证据。
+10. 最终报告优先由 `report --audience technical|business|review|postmortem` 生成；`postmortem` 用于标准十段式事故复盘文档（Executive Summary / Impact / Detection / Response / Recovery / Root Cause / Action Items / Lessons Learned / References / Timeline）。
+11. 报告后必须确认是否保留本次最终查询策略；auto 模式下若用户未打断，Agent 可根据复用价值直接 `strategy keep` 或 `strategy discard`，并写明理由。未生成 report 时，`strategy keep/discard` 会被拒绝。
+12. 排查过程中沉淀的"小颗粒、跨问题、可复用"事实/规则（≤300 字），必须用 `compass kb learn --statement ... --tag ...` 写进通用知识库，下次自动召回。长文档/系统拓扑请放 `knowledge/` 目录。
 
 最小命令链：
 
@@ -106,11 +108,13 @@ python3 -m compass_cli timeline
 - prod SQL 必须先 EXPLAIN，风险规则见 `guards/sql-safety.md`。
 - SLS 查询必须有高区分度实体锚点：订单号、支付单号、用户ID、手机号、traceId、枪编码、站点名等；禁止用“异常/失败/余额不足/支付/订单”等泛关键词作为主查询。
 - SLS 查询如果在实体锚点之外追加关键词，关键词必须来自代码常量/日志模板或 SQL 表字段/表结构，并通过 `keyword_source` 声明；不得由 Agent 自己猜。
+- 执行 `action plan/confirm/complete` 后必须阅读 CLI 输出里的 `display`：自然语言说明、命令原文、门禁评估和结构化结果都以 runtime 输出为准，不要在对话里自行编造门禁结论。
+- 门禁规则可以通过 `.env` 的 `COMPASS_SQL_GATE_MEDIUM_ROWS` / `COMPASS_SQL_GATE_HIGH_ROWS` / `COMPASS_SLS_GENERIC_KEYWORDS` / `COMPASS_SLS_KEYWORD_SOURCES` 调整；`COMPASS_NON_PROD_RELAX_GATES=1` 只允许放宽 test/uat 等非生产环境，不能关闭 prod SQL EXPLAIN、SLS anchor 或 keyword_source 要求。
 - 所有展示给用户的查询结果必须脱敏，规则见 `guards/data-masking.md`。
 - `action plan` 必须满足 track 级必填字段；缺字段时不能自行绕过。
 - Agent 使用罗盘排查时必须完整遵循 CLI Runtime 流程；禁止直接查询后再补状态，禁止绕过失败的 CLI 门禁。
 - evidence 应尽量填写 `kind / strength / raw-ref`，让证据质量进入报告。
-- 进入 `concluded` 后禁止继续追加 action/evidence；要补证据必须使用 `reopen --reason ...` 或重开 session。
+- 进入 `concluded/reported` 后禁止继续追加 action/evidence；要补证据必须使用 `reopen --reason ...` 或重开 session。
 - 结论后的策略沉淀确认不得跳过；即使不保留，也要用 `strategy discard` 记录原因。
 
 Track 门禁：
@@ -136,6 +140,7 @@ Read only the reference needed for the current task:
 - `references/intake-and-state.md`：首轮模板、最小定位实体、状态结构、证据链格式。
 - `references/runtime-protocol.md`：CLI Runtime、action 生命周期、Action Card、每轮最小调用顺序。
 - `references/safety-and-capabilities.md`：SQL/Redis/ES/脱敏门禁、adapter 能力、项目和策略系统。
+- `knowledge/playbooks/_index.md`：通用排查方法索引，不确定入口、已知页面/BFF、日志过期转数据等场景。
 - `knowledge/data-source-index.md`：Doris/CDC/JDBC Catalog/MySQL profile 的查找顺序和表找不到时的 fallback。
 
 For detailed SQL/Redis/ES/data masking rules, read the corresponding files under `guards/` only when that track is used.

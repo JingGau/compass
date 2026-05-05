@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import re
+import json
 from pathlib import Path
 from typing import Mapping, Optional
 
@@ -129,6 +130,51 @@ DISABLED_RESP = {
     "data": None,
     "error": "adapter 已禁用（config.yaml enabled=false）",
 }
+
+
+def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: str | None = None) -> dict | None:
+    """阻止 agent 自动模式绕过 Compass Runtime 直接查询 adapter。
+
+    人工直接使用 adapter 时不会设置 COMPASS_AGENT_AUTO，因此不受影响。
+    Agent 自动排查必须先通过 action plan 生成 action，再设置
+    COMPASS_RUNTIME_STATE_FILE / COMPASS_RUNTIME_ACTION_ID 进入 adapter。
+    """
+
+    if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return None
+
+    state_file = os.environ.get("COMPASS_RUNTIME_STATE_FILE", "").strip()
+    action_id = os.environ.get("COMPASS_RUNTIME_ACTION_ID", "").strip()
+    if not state_file or not action_id:
+        return _runtime_guard_block(adapter, operation, "缺少 COMPASS_RUNTIME_STATE_FILE 或 COMPASS_RUNTIME_ACTION_ID")
+
+    try:
+        state = json.loads(Path(state_file).read_text(encoding="utf-8"))
+    except Exception as exc:
+        return _runtime_guard_block(adapter, operation, f"无法读取 runtime state：{exc}")
+
+    if not state.get("flow", {}).get("confirmed"):
+        return _runtime_guard_block(adapter, operation, "会话尚未 confirm")
+
+    action = next((item for item in state.get("action_plan") or [] if str(item.get("action_id")) == action_id), None)
+    if not action:
+        return _runtime_guard_block(adapter, operation, f"找不到已规划 action：{action_id}")
+    if action.get("status") != "planned":
+        return _runtime_guard_block(adapter, operation, f"action {action_id} 状态为 {action.get('status')}，不能执行 adapter")
+    if expected_track and str(action.get("track", "")).lower() != expected_track.lower():
+        return _runtime_guard_block(adapter, operation, f"action {action_id} track 不是 {expected_track}")
+    return None
+
+
+def _runtime_guard_block(adapter: str, operation: str, reason: str) -> dict:
+    return {
+        "success": False,
+        "data": None,
+        "error": f"禁止 agent 自动模式裸调 adapter：{adapter}.{operation}。请先通过 compass action plan 并携带 runtime action 上下文。原因：{reason}",
+        "requires_runtime_action": True,
+        "adapter": adapter,
+        "operation": operation,
+    }
 
 
 def load_config(config_path: Optional[str] = None, caller_file: Optional[str] = None) -> dict:

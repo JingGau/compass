@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from unittest.mock import patch
 import unittest
 
 from tools.sql_gate import assess_sql_explain, parse_doris_explain
@@ -48,7 +49,28 @@ class SqlGateTest(unittest.TestCase):
         self.assertEqual(gate.risk_level, "low")
         self.assertFalse(gate.requires_confirmation)
 
+    def test_sql_row_thresholds_can_be_configured_by_environment(self) -> None:
+        explain = """
+        0:VOlapScanNode(204)
+        PREDICATES: ((user_id = 123))
+        partitions=1/1
+        tablets=1/1
+        cardinality=50000, avgRowSize=0.0, numNodes=1
+        """
+
+        with patch.dict(
+            "os.environ",
+            {
+                "COMPASS_SQL_GATE_MEDIUM_ROWS": "1000",
+                "COMPASS_SQL_GATE_HIGH_ROWS": "10000",
+            },
+        ):
+            gate = assess_sql_explain("SELECT * FROM t WHERE user_id=123", explain, environment="prod")
+
+        self.assertEqual(gate.risk_level, "high")
+        self.assertEqual(gate.status, "blocked")
+        self.assertIn("10000", gate.summary)
+
 
 if __name__ == "__main__":
     unittest.main()
-
