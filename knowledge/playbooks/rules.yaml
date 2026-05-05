@@ -1,0 +1,42 @@
+rules:
+  - id: screenshot-or-keyword-to-runtime-logs
+    trigger_keywords:
+      - 截图
+      - 页面
+      - 文案
+      - 按钮
+      - 提示
+      - 关键字
+      - 校验失败
+    recommended_task:
+      task_type: sls_plan
+      required_inputs:
+        - scene_fact
+        - anchor
+        - time_range
+        - keyword_source
+      suggested_commands:
+        - compass action plan --track sls --playbook screenshot-or-keyword-to-runtime-logs
+      rationale: 用户提供截图或关键字时，先查当时真实调用，再回代码或数据补证。
+      quality_flags:
+        - runtime_call_required
+  - id: direct-failure-to-change-root-cause
+    trigger_keywords:
+      - 连不上
+      - 不可达
+      - 连接失败
+      - 超时
+      - 离线
+      - 心跳中断
+      - 校验失败
+    recommended_task:
+      task_type: change_check
+      required_inputs:
+        - direct_failure_evidence
+        - recent_change
+        - event_at
+      suggested_commands:
+        - compass change record --type config --target <对象> --description <最近变更> --event-at <时间>
+      rationale: 直接断点只能解释哪里失败，需追最近变更、时间线、影响面和反证判断是否根因。
+      quality_flags:
+        - recent_change

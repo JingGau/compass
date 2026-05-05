@@ -13,6 +13,7 @@ from compass_core.knowledge import (
     search_knowledge,
     suggest_knowledge,
 )
+from compass_core.runtime import load_playbook_rules
 
 
 def test_record_knowledge_assigns_sequential_ids(tmp_path: Path) -> None:
@@ -80,3 +81,14 @@ def test_search_matches_id_tags_and_statement(tmp_path: Path) -> None:
     assert {item["id"] for item in search_knowledge("foo", path=kb)} == {"K001"}
     assert {item["id"] for item in search_knowledge("alpha", path=kb)} == {"K001"}
     assert {item["id"] for item in search_knowledge("k002", path=kb)} == {"K002"}
+
+
+def test_playbook_rules_include_machine_readable_triggers() -> None:
+    rules = load_playbook_rules()
+
+    by_id = {rule["id"]: rule for rule in rules}
+    screenshot_rule = by_id["screenshot-or-keyword-to-runtime-logs"]
+    direct_failure_rule = by_id["direct-failure-to-change-root-cause"]
+    assert "截图" in screenshot_rule["trigger_keywords"]
+    assert screenshot_rule["recommended_task"]["task_type"] == "sls_plan"
+    assert direct_failure_rule["recommended_task"]["task_type"] == "change_check"

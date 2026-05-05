@@ -248,7 +248,7 @@ scene fact -> action plan -> action complete -> hypothesis add -> conclude -> re
 
 Runtime 会硬拦截关键顺序：没有 `scene fact` 不能 `action plan`；`conclude` 后必须先生成 `report`，才能 `strategy keep/discard`；结论后要补证据只能 `reopen`。
 
-Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事件（最多保留 200 条短记录），`next --json` 返回 `health` 摘要，包含 scene/evidence/change/pending action/open hypothesis 数量和质量提示标记。
+Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事件（最多保留 200 条短记录），`next --json` 返回 `health` 摘要和 `task` 任务卡。任务卡由 `knowledge/playbooks/rules.yaml` 的机器可读规则生成，用于提示弱模型下一步应补 scene fact、SLS action、变更检查或结论。
 
 对话中的确认方式：
 
@@ -386,7 +386,7 @@ python3 -m compass_cli report --audience postmortem
 | 能力 | 命令/字段 | 作用 |
 |------|-----------|------|
 | 通用知识库 | `kb learn / kb suggest / kb list` + `start` 自动召回 | 排查中沉淀小颗粒事实/规则，下次自动注入上下文 |
-| 通用排查 Playbook | `knowledge/playbooks/` | 不确定入口、已知页面/BFF、日志过期转数据等方法论 |
+| 通用排查 Playbook | `knowledge/playbooks/` + `knowledge/playbooks/rules.yaml` | Markdown 给人读，YAML 规则给 Runtime 生成下一步任务卡 |
 | 变更登记 | `change record / change list` | 把发布、配置、灰度等变更结构化进 timeline |
 | 故障时间线 | `timeline` + report 头部表 | 把 changes / scene_facts / evidence / actions 按 event_at 排序 |
 | baseline / diff 事实 | `scene fact --category baseline / --category diff` | 显式登记"正常态 vs 异常态"对比，category=diff 强制有对比词 |

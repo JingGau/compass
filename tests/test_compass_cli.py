@@ -1560,6 +1560,53 @@ def test_next_json_includes_lightweight_health_summary(tmp_path: Path) -> None:
     assert "pending_actions" in health["quality_flags"]
 
 
+def test_next_task_card_recommends_log_plan_for_screenshot_keyword(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "用户提供截图，页面提示校验失败，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file, category="entrypoint", name="screenshot_keyword", value="页面提示校验失败", source="用户截图")
+
+    result = run_cli("next", "--state-file", str(state_file), "--json")
+
+    assert result.returncode == 0, result.stderr
+    task = json.loads(result.stdout)["next"]["task"]
+    assert task["task_type"] == "sls_plan"
+    assert task["playbook"] == "screenshot-or-keyword-to-runtime-logs"
+    assert "anchor" in task["required_inputs"]
+    assert "time_range" in task["required_inputs"]
+    assert "查当时真实调用" in task["rationale"]
+
+
+def test_next_task_card_recommends_change_check_for_direct_failure(tmp_path: Path) -> None:
+    state_file = tmp_path / "session.json"
+    run_cli("start", "某把枪突然充电校验失败，手机号 15921195068", "--state-file", str(state_file))
+    run_cli("confirm", "--state-file", str(state_file), "--mode", "auto")
+    run_scene_fact(state_file, category="object", name="gun_tcp", value="枪 TCP 连不上网关", source="SLS")
+    run_cli(
+        "evidence",
+        "add",
+        "--state-file",
+        str(state_file),
+        "--source",
+        "sls",
+        "--summary",
+        "日志显示 TCP 连不上网关",
+        "--kind",
+        "log",
+        "--strength",
+        "strong",
+    )
+
+    result = run_cli("next", "--state-file", str(state_file), "--json")
+
+    assert result.returncode == 0, result.stderr
+    task = json.loads(result.stdout)["next"]["task"]
+    assert task["task_type"] == "change_check"
+    assert task["playbook"] == "direct-failure-to-change-root-cause"
+    assert "change record" in task["suggested_commands"][0]
+    assert "recent_change" in task["quality_flags"]
+
+
 def test_sls_generic_keywords_can_be_configured_by_environment(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("COMPASS_SLS_GENERIC_KEYWORDS", "payment-ways-v2")
     state_file = tmp_path / "session.json"

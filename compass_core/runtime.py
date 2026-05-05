@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 from typing import Any
+import yaml
 
 from compass_core.intake import intake_problem
 from compass_core.state import default_state, now_iso, read_or_init_state, update_state, write_state
@@ -180,6 +181,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
     state = _load_state(path)
     state["__path__"] = str(path)
     phase = _phase(state)
+    task = _build_next_task(state)
     if not state.get("flow", {}).get("confirmed"):
         return {
             "phase": phase,
@@ -187,6 +189,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "会话尚未确认执行模式。请先运行 compass confirm。",
             "next_actions": ["confirm"],
             "health": _build_session_health(state),
+            "task": task,
         }
     if phase == "action_ready":
         if not state.get("scene_facts"):
@@ -196,6 +199,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "请先记录场景事实，展开入口、对象、上下游、配置或差异，再基于事实推进查询和假设。",
                 "next_actions": ["scene fact", "playbook recall", "action plan"],
                 "health": _build_session_health(state),
+                "task": task,
             }
         if not state.get("playbook_recall", {}).get("recalled"):
             return {
@@ -204,6 +208,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "已有场景事实，可先召回 playbook；若直接规划 action，runtime 仍会注入候选知识上下文并标记未召回。",
                 "next_actions": ["playbook recall", "action plan", "hypothesis add", "scene fact"],
                 "health": _build_session_health(state),
+                "task": task,
             }
         return {
             "phase": phase,
@@ -211,6 +216,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "已有场景事实和 playbook 召回，请继续记录查询证据，或从事实/证据派生新假设。",
             "next_actions": ["action plan", "hypothesis add", "scene fact"],
             "health": _build_session_health(state),
+            "task": task,
         }
     if phase == "evidence_collecting":
         pending = _pending_actions(state)
@@ -222,6 +228,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": f"存在待完成 action：{action_ids}。请先完成或明确改计划，再继续生成新结论。",
                 "next_actions": [f"action complete {item.get('action_id')}" for item in pending],
                 "health": _build_session_health(state),
+                "task": task,
             }
         if not state.get("scene_facts"):
             return {
@@ -230,6 +237,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "已有证据，但还缺少场景事实。请先用 scene fact 记录入口、对象、上下游、配置或差异。",
                 "next_actions": ["scene fact", "action plan"],
                 "health": _build_session_health(state),
+                "task": task,
             }
 
         payload = {
@@ -238,6 +246,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "已有场景事实和证据，可继续补证据、派生假设，或输出带证据引用的结论。",
             "next_actions": ["action plan", "hypothesis add", "conclude"],
             "health": _build_session_health(state),
+            "task": task,
         }
         return payload
     if phase == "concluded":
@@ -247,6 +256,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "排查已输出结论。请先生成报告，再确认是否保留本次最终查询策略。",
             "next_actions": ["report"],
             "health": _build_session_health(state),
+            "task": task,
         }
     if phase == "reported":
         review = state.get("strategy_review") or {}
@@ -257,6 +267,7 @@ def next_step(path: str | Path) -> dict[str, Any]:
                 "message": "报告已生成。请确认是否保留本次最终查询策略。",
                 "next_actions": ["strategy keep", "strategy discard"],
                 "health": _build_session_health(state),
+                "task": task,
             }
         return {
             "phase": phase,
@@ -264,8 +275,9 @@ def next_step(path: str | Path) -> dict[str, Any]:
             "message": "排查已结束。可查看报告，或在新信息出现时 reopen。",
             "next_actions": ["report", "reopen"],
             "health": _build_session_health(state),
+            "task": task,
         }
-    return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": [], "health": _build_session_health(state)}
+    return {"phase": phase, "blocked": False, "message": "继续推进。", "next_actions": [], "health": _build_session_health(state), "task": task}
 
 
 def plan_action(
@@ -1828,6 +1840,17 @@ def recall_playbook(
     return _update_runtime_state(path, mutate)
 
 
+def load_playbook_rules(path: str | Path | None = None) -> list[dict[str, Any]]:
+    rules_path = Path(path) if path is not None else Path(__file__).parent.parent / "knowledge" / "playbooks" / "rules.yaml"
+    if not rules_path.exists():
+        return []
+    data = yaml.safe_load(rules_path.read_text(encoding="utf-8")) or {}
+    rules = data.get("rules") or []
+    if not isinstance(rules, list):
+        return []
+    return [rule for rule in rules if isinstance(rule, dict) and rule.get("id")]
+
+
 def _find_action_plan(state: dict[str, Any], action_id: str) -> dict[str, Any]:
     for action in state.get("action_plan", []):
         if action.get("action_id") == action_id:
@@ -1837,6 +1860,107 @@ def _find_action_plan(state: dict[str, Any], action_id: str) -> dict[str, Any]:
 
 def _pending_actions(state: dict[str, Any]) -> list[dict[str, Any]]:
     return [item for item in state.get("action_plan", []) if item.get("status") == "planned"]
+
+
+def _build_next_task(state: dict[str, Any]) -> dict[str, Any]:
+    phase = _phase(state)
+    if not state.get("flow", {}).get("confirmed"):
+        return _task_card(
+            task_type="confirm",
+            rationale="首轮人工确认后才能进入自动排查。",
+            suggested_commands=["compass confirm --mode auto"],
+        )
+    pending = _pending_actions(state)
+    if pending:
+        action_id = str(pending[0].get("action_id", ""))
+        return _task_card(
+            task_type="action_complete",
+            rationale="存在 planned action，必须先完成或调整计划。",
+            required_inputs=["summary", "finding"],
+            suggested_commands=[f"compass action complete --action-id {action_id} --summary <结果摘要>"],
+        )
+    if not state.get("scene_facts"):
+        return _task_card(
+            task_type="scene_fact",
+            rationale="先记录入口、对象、上下游、配置或差异事实，再规划查询动作。",
+            required_inputs=["category", "name", "value", "source"],
+            suggested_commands=["compass scene fact --category entrypoint --name <入口> --value <事实> --source <来源>"],
+        )
+
+    rule = _match_playbook_rule(state)
+    if rule:
+        task = dict(rule.get("recommended_task") or {})
+        task.setdefault("task_type", "action_plan")
+        task.setdefault("required_inputs", [])
+        task.setdefault("suggested_commands", [])
+        task.setdefault("quality_flags", [])
+        task["playbook"] = str(rule.get("id", ""))
+        return task
+
+    if phase == "evidence_collecting" and state.get("evidence"):
+        return _task_card(
+            task_type="conclusion_ready",
+            rationale="已有场景事实和证据，可继续补证或输出引用证据的结论。",
+            required_inputs=["evidence", "what", "where", "when", "why_technical", "inference_chain"],
+            suggested_commands=["compass conclude --evidence E1 ..."],
+        )
+    return _task_card(
+        task_type="action_plan",
+        rationale="已有场景事实，下一步应规划最小证据动作。",
+        required_inputs=["objective", "success_criteria", "track"],
+        suggested_commands=["compass action plan --track <sls|code|sql|manual> ..."],
+    )
+
+
+def _task_card(
+    *,
+    task_type: str,
+    rationale: str,
+    required_inputs: list[str] | None = None,
+    suggested_commands: list[str] | None = None,
+    quality_flags: list[str] | None = None,
+) -> dict[str, Any]:
+    return {
+        "task_type": task_type,
+        "rationale": rationale,
+        "required_inputs": list(required_inputs or []),
+        "suggested_commands": list(suggested_commands or []),
+        "quality_flags": list(quality_flags or []),
+    }
+
+
+def _match_playbook_rule(state: dict[str, Any]) -> dict[str, Any] | None:
+    text = _state_search_text(state)
+    if not text:
+        return None
+    rules = load_playbook_rules()
+    matched: list[tuple[int, dict[str, Any]]] = []
+    for index, rule in enumerate(rules):
+        keywords = [str(keyword).lower() for keyword in (rule.get("trigger_keywords") or [])]
+        if any(keyword and keyword in text for keyword in keywords):
+            matched.append((index, rule))
+    if not matched:
+        return None
+    if state.get("evidence") and not state.get("changes"):
+        for _, rule in matched:
+            if str(rule.get("id")) == "direct-failure-to-change-root-cause":
+                return rule
+    return matched[0][1]
+
+
+def _state_search_text(state: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("problem", "entities"):
+        value = state.get(key)
+        if isinstance(value, dict):
+            parts.extend(str(v) for v in value.values())
+        else:
+            parts.append(str(value or ""))
+    for collection in ("scene_facts", "evidence", "investigation_hints"):
+        for item in state.get(collection) or []:
+            if isinstance(item, dict):
+                parts.extend(str(v) for v in item.values())
+    return " ".join(parts).lower()
 
 
 def _build_session_health(state: dict[str, Any]) -> dict[str, Any]:
