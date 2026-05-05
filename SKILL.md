@@ -13,7 +13,7 @@ Compass 是本地优先的线上问题排查 harness。核心职责不是“让 
 
 - Skill 只决定“何时启用罗盘”和“如何和用户协作”；状态、门禁、证据、报告由 CLI Runtime 决定。
 - 罗盘没有会话级执行分支；只需要首轮 `confirm`，之后 Agent 按 `next --json` 的 `task` 持续推进，直到用户打断或 runtime 门禁要求确认。
-- Hermes/minimax 等 runner 必须通过 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，确保全进程 `COMPASS_ADAPTER_MODE=runtime`。
+- Hermes/minimax 等 runner 必须通过 `scripts/compass-agent-runtime.sh <agent-command>` 或等价环境启动，确保全进程 `COMPASS_ADAPTER_MODE=runtime`。
 - Agent 调 adapter 必须通过 `compass action env --action-id <id>` 获取 action 级 runtime 环境；人类临时调试 adapter 不设置这些变量，不进入罗盘证据链。
 - Agent 读代码必须通过 `compass code search/show --action-id <id>`，并且该 id 必须是已规划的 `track=code` action。
 - 如果 Skill 文字和 CLI 输出冲突，以 CLI 输出的 `display`、`health`、`task` 和错误信息为准。
@@ -39,8 +39,8 @@ Do not use this skill for:
 2. 首轮只做 Problem Intake 和方案确认，禁止调用 adapter。`compass start` 会自动从通用知识库（`memory/knowledge.yaml`）召回 top-5 适用知识，Agent 必须把它们当成"待校对的提示"而不是"已认证的事实"。
 3. 用户完成 `confirm` 后，Agent 必须按 CLI Runtime 持续推进，不要每一步都询问是否继续；只有用户主动打断、runtime 硬门禁失败、prod 中高风险 SQL、外部/高风险数据源、缺少关键实体时才暂停请用户决策。
 4. 用户确认后，必须使用 CLI Runtime 维护状态，不得跳过 start/confirm/scene/action/evidence/conclude/report 流程；runtime 会拦截未确认、缺 scene fact、未 report 就策略沉淀等顺序错误。
-   - Hermes/minimax 等 runner 必须用 `scripts/compass-agent-auto.sh <agent-command>` 或等价环境启动，不能绕过 runtime guard。
-   - Agent 调用 SLS/Doris adapter 时必须处于已规划 action 上下文：优先运行 `compass action env --action-id <action_id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
+   - Hermes/minimax 等 runner 必须用 `scripts/compass-agent-runtime.sh <agent-command>` 或等价环境启动，不能绕过 runtime guard。
+   - Agent 调用 SLS/Doris adapter 时必须处于已规划 action 上下文：优先运行 `compass action env --action-id <action_id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_RUNTIME_GUARD=1`、`COMPASS_RUNTIME_STATE_FILE=<state>`、`COMPASS_RUNTIME_ACTION_ID=<action_id>`。裸调 SLS/Doris adapter 会被拒绝；人工直接使用 adapter 不设置这些变量，不受影响。
    - Agent 读取业务代码时必须先规划 `track=code` action，再用 `compass code search/show --action-id <action_id>`；裸 `rg/sed/cat` 只允许作为人类临时调试，不计入罗盘证据链。
 5. 每次制定 `action plan` 前，Agent 必须把 `knowledge/playbooks/` 作为策略参考上下文之一；若匹配到适用 playbook，应在 action objective/source/success-criteria 或后续 evidence finding 中体现采用了哪条 playbook。Playbook 只辅助选择侦查路径，不替代 Runtime 门禁。
 6. 先记录 `scene fact`，再通过 `action plan -> action complete` 生成 evidence；没有 scene fact 时 `action plan` 会被拒绝。当排查涉及"前后对比"时，必须用 `scene fact --category baseline` / `--category diff` 把"正常态 vs 异常态"显式落盘。

@@ -842,7 +842,7 @@ def _action_plan_command(action: dict[str, Any]) -> str:
 def _env_command(env: dict[str, str]) -> str:
     order = [
         "COMPASS_ADAPTER_MODE",
-        "COMPASS_AGENT_AUTO",
+        "COMPASS_RUNTIME_GUARD",
         "COMPASS_RUNTIME_STATE_FILE",
         "COMPASS_RUNTIME_ACTION_ID",
     ]

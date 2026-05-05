@@ -449,7 +449,7 @@ def adapter_runtime_env(path: str | Path, *, action_id: str) -> tuple[dict[str, 
             )
         env = {
             "COMPASS_ADAPTER_MODE": "runtime",
-            "COMPASS_AGENT_AUTO": "1",
+            "COMPASS_RUNTIME_GUARD": "1",
             "COMPASS_RUNTIME_STATE_FILE": str(Path(path).resolve()),
             "COMPASS_RUNTIME_ACTION_ID": action_id,
         }

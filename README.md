@@ -258,9 +258,9 @@ Runtime 还会维护轻量可观测信息：`state.events` 记录关键流程事
 
 首轮确认只表示“允许本次排查开始”。之后 Agent 应选择日志/代码/数据库等侦查路径并推进 CLI 流程，不逐步询问是否继续；程序负责流程门禁和安全拦截。
 
-Hermes/minimax 等 runner 建议通过 `scripts/compass-agent-auto.sh <agent-command>` 启动，强制整个进程处于 `COMPASS_ADAPTER_MODE=runtime`，避免弱模型绕过 adapter action 上下文。
+Hermes/minimax 等 runner 建议通过 `scripts/compass-agent-runtime.sh <agent-command>` 启动，强制整个进程处于 `COMPASS_ADAPTER_MODE=runtime`，避免弱模型绕过 adapter action 上下文。
 
-Agent 裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_AGENT_AUTO=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。`action env` 会写入 `adapter_env_generated` 事件，方便审计。人工直接使用 adapter 不设置这些变量，不进入罗盘证据链。
+Agent 裸调 SLS/Doris adapter 会被拒绝；必须先 `action plan`，再运行 `compass action env --action-id <id>` 获取 `COMPASS_ADAPTER_MODE=runtime`、`COMPASS_RUNTIME_GUARD=1`、`COMPASS_RUNTIME_STATE_FILE`、`COMPASS_RUNTIME_ACTION_ID`，带着这些变量执行真实查询。`action env` 会写入 `adapter_env_generated` 事件，方便审计。人工直接使用 adapter 不设置这些变量，不进入罗盘证据链。
 
 Agent 读取业务代码也必须走受控入口：先规划 `track=code` action，再使用 `compass code search/show --action-id <id>`。gateway 会校验 `track=code`、`status=planned` 和 repo 边界，并写入 `code_search_executed` / `code_show_executed` 审计事件；裸 `rg/sed/cat` 只适合人类临时调试，不算罗盘证据链。
 

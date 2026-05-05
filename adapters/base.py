@@ -188,6 +188,8 @@ def agent_auto_runtime_guard(adapter: str, operation: str, *, expected_track: st
 
 
 def _adapter_runtime_mode() -> str:
+    if os.environ.get("COMPASS_RUNTIME_GUARD", "").strip().lower() in _TRUTHY:
+        return "runtime"
     if os.environ.get("COMPASS_AGENT_AUTO", "").strip().lower() in _TRUTHY:
         return "runtime"
     explicit = os.environ.get("COMPASS_ADAPTER_MODE", "").strip().lower()

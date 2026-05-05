@@ -1481,11 +1481,14 @@ def test_action_env_prints_agent_auto_runtime_contract(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     env = payload["env"]
     assert env["COMPASS_ADAPTER_MODE"] == "runtime"
-    assert env["COMPASS_AGENT_AUTO"] == "1"
+    assert env["COMPASS_RUNTIME_GUARD"] == "1"
+    assert "COMPASS_AGENT_AUTO" not in env
     assert env["COMPASS_RUNTIME_STATE_FILE"] == str(state_file.resolve())
     assert env["COMPASS_RUNTIME_ACTION_ID"] == "A1"
     assert payload["display"]["before"].startswith("准备执行：")
     assert "COMPASS_ADAPTER_MODE=runtime" in payload["display"]["command_raw"]
+    assert "COMPASS_RUNTIME_GUARD=1" in payload["display"]["command_raw"]
+    assert "COMPASS_AGENT_AUTO" not in payload["display"]["command_raw"]
     assert "COMPASS_RUNTIME_ACTION_ID=A1" in payload["display"]["command_raw"]
     assert payload["display"]["after"].startswith("结果：")
 

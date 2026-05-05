@@ -37,7 +37,7 @@ default_env: "prod"
 
 
 def test_agent_auto_rejects_direct_sls_query_without_runtime_action(tmp_path: Path, monkeypatch) -> None:
-    monkeypatch.setenv("COMPASS_AGENT_AUTO", "1")
+    monkeypatch.setenv("COMPASS_RUNTIME_GUARD", "1")
     monkeypatch.delenv("COMPASS_RUNTIME_ACTION_ID", raising=False)
     monkeypatch.delenv("COMPASS_RUNTIME_STATE_FILE", raising=False)
     monkeypatch.setenv("SLS[0].NAME", "PROD")
